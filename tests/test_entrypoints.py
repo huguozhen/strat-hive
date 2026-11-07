@@ -94,18 +94,24 @@ class EntryPointsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             db=str(Path(d)/'ledger.db'); ledger=Ledger(db)
             account=ledger.execute('account.create',{'name':'券商','commission_rate':'0','cash':'50'})['id']
-            payload={'account_id':account,'broker':{'cash':'50','holdings':[]}}
+            payload={'account_id':account,'broker':{'cash':'50','holdings':[{'code':'000001','quantity':10,'cost':'-1.2345'}]}}
             path=Path(d)/'broker.json'; path.write_text(json.dumps(payload),encoding='utf-8')
             before=ledger.execute('account.get',{'id':account})
             result=subprocess.run([sys.executable,'-m','strathive','--db',db,'reconcile','--json','@'+str(path)],capture_output=True,text=True,check=True)
-            self.assertTrue(json.loads(result.stdout)['matches'])
+            self.assertEqual(json.loads(result.stdout)['broker_comparison']['unverified_codes'],['000001'])
+            self.assertEqual(json.loads(result.stdout)['broker_comparison']['holdings'][0]['status'],'extra')
+            self.assertEqual(json.loads(result.stdout)['broker_comparison']['holdings'][0]['broker']['cost'],'-1.2345')
             server=make_server('127.0.0.1',0,db); thread=threading.Thread(target=server.serve_forever,daemon=True); thread.start()
             base=f'http://127.0.0.1:{server.server_port}'
             try:
                 with urllib.request.urlopen(base+'/') as response:
                     self.assertIn('即时对账',response.read().decode())
                 request=urllib.request.Request(base+'/api/reconcile',data=json.dumps(payload).encode(),headers={'Content-Type':'application/json'},method='POST')
-                with urllib.request.urlopen(request) as response: self.assertTrue(json.load(response)['matches'])
+                with urllib.request.urlopen(request) as response:
+                    comparison=json.load(response)['broker_comparison']
+                    self.assertEqual(comparison['unverified_codes'],['000001'])
+                    self.assertEqual(comparison['holdings'][0]['status'],'extra')
+                    self.assertEqual(comparison['holdings'][0]['broker']['cost'],'-1.2345')
                 bad={'account_id':account,'broker':{'cash':'-1','holdings':[]}}
                 request=urllib.request.Request(base+'/api/reconcile',data=json.dumps(bad).encode(),headers={'Content-Type':'application/json'},method='POST')
                 with self.assertRaises(urllib.error.HTTPError) as err: urllib.request.urlopen(request)
