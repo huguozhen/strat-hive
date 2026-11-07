@@ -18,6 +18,15 @@ def decimal(value, label, zero=False, places=None):
     except (ValueError, InvalidOperation):
         raise LedgerError(f'{label}须为有效的正数' + ('或零' if zero else '') + (f'，最多 {places} 位小数' if places is not None else ''))
 
+def cost_price(value):
+    try:
+        n = Decimal(str(value))
+        if not n.is_finite() or abs(n) > Decimal('10000000000000') or n.as_tuple().exponent < -4:
+            raise ValueError()
+        return n
+    except (ValueError, InvalidOperation):
+        raise LedgerError('成本价须为有效数值，绝对值不超过 10000000000000，最多 4 位小数')
+
 def money(value, zero=False):
     return int(decimal(value, '金额', zero, 2) * 100)
 
@@ -186,7 +195,7 @@ class Ledger:
             for item in items:
                 sec = db.execute('SELECT * FROM securities WHERE code=? OR name=?',(item.get('security'),item.get('security'))).fetchall()
                 if len(sec)!=1: raise LedgerError('本地目录未收录或名称不唯一，请检查代码或更新证券资料')
-                n = quantity(item.get('quantity')); cost = str(decimal(item.get('cost'),'成本价',True,4))
+                n = quantity(item.get('quantity')); cost = str(cost_price(item.get('cost')))
                 date = required(item,'date')
                 try: datetime.date.fromisoformat(date)
                 except ValueError: raise LedgerError('持仓日期须为 YYYY-MM-DD')
@@ -307,22 +316,24 @@ class Ledger:
         if not isinstance(entries, list): raise LedgerError('券商持仓须为数组')
         positions = {}
         seen = set()
+        unverified_codes = []
         for item in entries:
             code = required(item, 'code')
+            if not re.fullmatch(r'[0-9]{6}',code): raise LedgerError('证券代码须为六位数字字符串')
             if code in seen: raise LedgerError('券商持仓包含重复证券代码')
             seen.add(code)
             sec = db.execute('SELECT * FROM securities WHERE code=?', (code,)).fetchone()
-            if not sec: raise LedgerError('证券代码未在本地目录收录，请检查或更新资料')
+            if not sec: unverified_codes.append(code)
             n = decimal(item.get('quantity'), '数量', True)
             if n != n.to_integral_value() or n > 2**53: raise LedgerError('数量须为非负整数')
-            cost = decimal(item.get('cost'), '成本价', True, 4)
-            if n: positions[code] = {'code':code, 'name':sec['name'], 'quantity':int(n), 'cost':format(cost,'.4f')}
+            cost = cost_price(item.get('cost'))
+            if n: positions[code] = {'code':code, 'name':sec['name'] if sec else None, 'quantity':int(n), 'cost':format(cost,'.4f'), 'catalog_verified':bool(sec)}
         ledger_positions = {h['code']:h for h in account['holdings']}
         rows = []
         for code in sorted(positions.keys() | ledger_positions.keys()):
             actual, recorded = positions.get(code), ledger_positions.get(code)
             status = 'extra' if recorded is None else 'missing' if actual is None else 'match' if actual['quantity']==recorded['quantity'] and Decimal(actual['cost'])==Decimal(recorded['cost']) else 'different'
-            rows.append({'code':code,'name':(actual or recorded)['name'],'status':status,'broker':actual,'account':recorded,
+            rows.append({'code':code,'name':(actual or {}).get('name') or (recorded or {}).get('name'),'status':status,'broker':actual,'account':recorded,
                          'quantity_difference':actual['quantity']-recorded['quantity'] if actual and recorded else None,
                          'cost_difference':format(Decimal(actual['cost'])-Decimal(recorded['cost']),'.4f') if actual and recorded else None})
         cash_result = {'broker':str(cash),'account':account['cash'],'difference':str(cash-Decimal(account['cash'])),'matches':cash==Decimal(account['cash'])}
@@ -349,7 +360,7 @@ class Ledger:
         allocation = {'account_cash':account['cash'],'pool_cash':fmt(cents(pool_cash)),'unallocated_cash':account['unallocated_cash'],
                       'pools':account['pools'],'holdings':allocation_holdings,
                       'matches':Decimal(account['cash'])==pool_cash+Decimal(account['unallocated_cash']) and all(h['matches'] for h in allocation_holdings)}
-        return {'matches':broker_matches and allocation['matches'],'broker_comparison':{'matches':broker_matches,'cash':cash_result,'holdings':rows},'allocation_comparison':allocation,
+        return {'matches':broker_matches and allocation['matches'],'broker_comparison':{'matches':broker_matches,'cash':cash_result,'holdings':rows,'unverified_codes':sorted(unverified_codes)},'allocation_comparison':allocation,
                 'cost_note':'账本成本参考同花顺模拟炒股近似口径，尚未证实与真实交易端一致；费用、清仓重买及券商口径差异可能导致成本不同。账户与池独立计算，池成本按数量加权汇总；池清仓而账户未清仓时两者成本可以不同，资产分配一致性以现金及数量为准。'}
 
     def replay(self, db, ident):

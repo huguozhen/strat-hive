@@ -45,8 +45,11 @@ class ReconciliationTest(unittest.TestCase):
         self.assertTrue(result['matches'])
         before=self.ledger.execute('account.get',{'id':self.account})
         invalid=[{'cash':'-1','holdings':[]},{'cash':'0','holdings':[{'code':'600000','quantity':-1,'cost':0}]},
-                 {'cash':'0','holdings':[{'code':'600000','quantity':1,'cost':'-1'}]},
-                 {'cash':'0','holdings':[{'code':'999999','quantity':1,'cost':0}]},
+                 {'cash':'0','holdings':[{'code':'600000','quantity':1,'cost':'-1.00001'}]},
+                 {'cash':'0','holdings':[{'code':'600000','quantity':1,'cost':'NaN'}]},
+                 {'cash':'0','holdings':[{'code':'99999x','quantity':1,'cost':0}]},
+                 {'cash':'0','holdings':[{'code':'１２３４５６','quantity':1,'cost':0}]},
+                 {'cash':'0','holdings':[{'code':'000001','quantity':1,'cost':0},{'code':'000001','quantity':2,'cost':0}]},
                  {'cash':'0','holdings':[{'code':'600000','quantity':0,'cost':0},{'code':'600000','quantity':1,'cost':0}]},
                  {'cash':'0','holdings':[None]},{'cash':'0','holdings':None}, {'holdings':[]}]
         for broker in invalid:
@@ -118,3 +121,41 @@ class ReconciliationTest(unittest.TestCase):
         self.assertTrue(row['matches'])
         self.assertFalse(row['cost_matches'])
         self.assertEqual(row['cost_difference'],'-2.0000')
+
+    def test_broker_position_can_be_compared_without_catalog(self):
+        ledger=Ledger(Path(self.tmp.name)/'empty-catalog.db')
+        account=ledger.execute('account.create',{'name':'账户','cash':'0','commission_rate':'0'})['id']
+        before=ledger.execute('account.get',{'id':account})
+        result=ledger.execute('reconcile',{'account_id':account,'broker':{'cash':'0','holdings':[{'code':'000001','quantity':10,'cost':'1'}]}})
+        row=result['broker_comparison']['holdings'][0]
+        self.assertEqual((row['code'],row['status'],row['broker']['catalog_verified']),('000001','extra',False))
+        self.assertEqual(result['broker_comparison']['unverified_codes'],['000001'])
+        self.assertEqual(ledger.execute('account.get',{'id':account}),before)
+
+    def test_missing_catalog_entry_still_compares_existing_account_position(self):
+        self.ledger.execute('catalog.import',{'source':'更新目录','securities':[{'code':'510300','name':'基金','type':'etf'}]})
+        broker={'cash':'1000','holdings':[{'code':'600000','quantity':100,'cost':'10'},{'code':'000001','quantity':0,'cost':'0'}]}
+        result=self.ledger.execute('reconcile',{'account_id':self.account,'broker':broker})
+        self.assertTrue(result['matches'])
+        self.assertEqual(result['broker_comparison']['unverified_codes'],['000001','600000'])
+        row=result['broker_comparison']['holdings'][0]
+        self.assertEqual((row['name'],row['status'],row['broker']['catalog_verified']),('浦发银行','match',False))
+
+    def test_negative_cost_after_profitable_sale_can_be_reconciled(self):
+        l=self.ledger
+        l.execute('cash.move',{'account_id':self.account,'pool_id':self.pool,'direction':'in','amount':'1000','time':'2025-01-02T09:00'})
+        l.execute('trade.create',{'run_id':self.run,'security':'510300','direction':'buy','time':'2025-01-02T10:00','price':'5','quantity':100,'commission':'0','stamp_tax':'0','transfer_fee':'0'})
+        l.execute('trade.create',{'run_id':self.run,'security':'510300','direction':'sell','time':'2025-01-03T10:00','price':'12','quantity':50,'commission':'0','stamp_tax':'0','transfer_fee':'0'})
+        result=l.execute('reconcile',{'account_id':self.account,'broker':{'cash':'1100','holdings':[{'code':'600000','quantity':100,'cost':'10'},{'code':'510300','quantity':50,'cost':'-2.0000'}]}})
+        self.assertTrue(result['matches'])
+
+    def test_negative_initial_cost_is_preserved_and_reconciled(self):
+        l=self.ledger
+        account=l.execute('account.create',{'name':'负成本','cash':'0','commission_rate':'0'})['id']
+        strategy=l.execute('strategy.create',{'name':'策略负成本'})['id']
+        pool=l.execute('pool.create',{'account_id':account,'name':'池'})['id']
+        l.execute('run.create',{'strategy_id':strategy,'pool_id':pool,'name':'运行'})
+        l.execute('initial.record',{'account_id':account,'holdings':[{'security':'600000','quantity':100,'cost':'-1.2345','date':'2025-01-01','allocations':[{'pool_id':pool,'quantity':100}]}]})
+        self.assertEqual(l.execute('account.get',{'id':account})['holdings'][0]['cost'],'-1.2345')
+        result=l.execute('reconcile',{'account_id':account,'broker':{'cash':'0','holdings':[{'code':'600000','quantity':100,'cost':'-1.2345'}]}})
+        self.assertTrue(result['matches'])
