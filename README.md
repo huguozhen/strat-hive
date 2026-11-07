@@ -1,6 +1,6 @@
 # 策略蜂巢
 
-单人本地策略运行账本：记录实际资产账户、策略、资产池和初始资产归属。支持建账、资金管理和真实成交记录，不提供行情或自动下单。需要 Python 3.10 或更新版本，无第三方运行依赖。
+单人本地策略运行账本：记录实际资产账户、策略、资产池和初始资产归属。支持建账、资金管理、真实成交记录和即时对账，不提供行情或自动下单。需要 Python 3.10 或更新版本，无第三方运行依赖。
 
 ## 启动
 
@@ -63,9 +63,28 @@ python -m strathive trade.list --json '{"run_id":1,"security":"600000","from":"2
 python -m strathive trade.get --json '{"id":1}'
 python -m strathive trade.update --json '{"id":1,"price":"10.10"}'
 python -m strathive trade.delete --json '{"id":1}'
+python -m strathive reconcile --json @broker.json
 ```
 
 `initial.record` 的 `holdings` 数组必须包含该账户全部初始持仓，每条 `allocations` 之和等于对应数量；跨池承接时列出多个池。无持仓账户可以显式运行 `initial.close --json '{"account_id":1}'`，或由首次资金操作结束建账。`cash.move` 不传 `pool_id` 表示外部资金，传入时 `in` 为未分配现金划入池、`out` 为池划回未分配现金。运行状态为 `running`、`paused`、`ended`；结束不可重启，可以在池空闲时创建新的运行。
+
+## 即时对账
+
+在“即时对账”页面选择账户，填写券商现金余额，逐条添加证券代码、数量和每股或每份成本价；无持仓时无需添加。也可导入 UTF-8 JSON 文件。CLI 支持手动传入同一 JSON 或通过 `--json @broker.json` 导入；完整文件示例（账户 ID 请按实际修改）：
+
+```json
+{
+  "account_id": 1,
+  "broker": {
+    "cash": "1000.00",
+    "holdings": [
+      {"code": "600000", "quantity": 100, "cost": "10.0000"}
+    ]
+  }
+}
+```
+
+Web 也可导入单独的 `broker` 对象。代码为本地证券资料中的六位字符串（保留前导零），数量为非负整数，成本价为非负数、最多四位小数；零数量视为无持仓，重复代码和未知证券会被拒绝。现金为非负数、最多四位小数，填写与账本现金余额对应的券商字段，而不是可用资金；不计算未成交委托冻结资金。结果 `matches` 表示整体是否一致，`broker_comparison` 展示券商减账本的差额及 `missing`（券商缺少）、`extra`（券商多出）、`different` 或 `match`，`allocation_comparison` 展示账户与池、未分配现金关系。没有另一侧的证券时差额为 `null`，请查看状态。账户成本和池汇总成本以各池未四舍五入的剩余成本金额加权，展示和比较至四位小数。对账使用现有账本快照，不需要行情，不保存本次输入或结果，也不会改变账本事实。
 
 ## 测试
 

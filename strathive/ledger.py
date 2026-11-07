@@ -111,6 +111,7 @@ class Ledger:
         if action == 'account.list':
             return [self.account(db, r['id']) for r in db.execute('SELECT id FROM accounts ORDER BY id').fetchall()]
         if action == 'account.get': return self.account(db, data.get('id'))
+        if action == 'reconcile': return self.reconcile(db, data)
         if action == 'strategy.create':
             cur = db.execute('INSERT INTO strategies(name,description) VALUES(?,?)',(required(data,'name'),str(data.get('description','')).strip()))
             return {'id':cur.lastrowid}
@@ -279,6 +280,58 @@ class Ledger:
                 return result[0]
             return result
         raise LedgerError('未知操作')
+
+    def reconcile(self, db, data):
+        account = self.account(db, data.get('account_id'))
+        broker = data.get('broker')
+        if not isinstance(broker, dict): raise LedgerError('请填写券商账户状态')
+        cash = decimal(broker.get('cash'), '券商现金余额', True, 4)
+        entries = broker.get('holdings')
+        if not isinstance(entries, list): raise LedgerError('券商持仓须为数组')
+        positions = {}
+        seen = set()
+        for item in entries:
+            code = required(item, 'code')
+            if code in seen: raise LedgerError('券商持仓包含重复证券代码')
+            seen.add(code)
+            sec = db.execute('SELECT * FROM securities WHERE code=?', (code,)).fetchone()
+            if not sec: raise LedgerError('证券代码未在本地目录收录，请检查或更新资料')
+            n = decimal(item.get('quantity'), '数量', True)
+            if n != n.to_integral_value() or n > 2**53: raise LedgerError('数量须为非负整数')
+            cost = decimal(item.get('cost'), '成本价', True, 4)
+            if n: positions[code] = {'code':code, 'name':sec['name'], 'quantity':int(n), 'cost':format(cost,'.4f')}
+        ledger_positions = {h['code']:h for h in account['holdings']}
+        rows = []
+        for code in sorted(positions.keys() | ledger_positions.keys()):
+            actual, recorded = positions.get(code), ledger_positions.get(code)
+            status = 'extra' if recorded is None else 'missing' if actual is None else 'match' if actual['quantity']==recorded['quantity'] and Decimal(actual['cost'])==Decimal(recorded['cost']) else 'different'
+            rows.append({'code':code,'name':(actual or recorded)['name'],'status':status,'broker':actual,'account':recorded,
+                         'quantity_difference':actual['quantity']-recorded['quantity'] if actual and recorded else None,
+                         'cost_difference':format(Decimal(actual['cost'])-Decimal(recorded['cost']),'.4f') if actual and recorded else None})
+        cash_result = {'broker':str(cash),'account':account['cash'],'difference':str(cash-Decimal(account['cash'])),'matches':cash==Decimal(account['cash'])}
+        broker_matches = cash_result['matches'] and all(r['status']=='match' for r in rows)
+        pool_cash = sum((Decimal(p['cash']) for p in account['pools']), Decimal(0))
+        _, state = self.replay(db, account['id'])
+        pool_positions = {}
+        for pool in state.values():
+            for h in pool['holdings'].values():
+                if not h['quantity']: continue
+                aggregate = pool_positions.setdefault(h['code'], {'quantity':0,'total':Decimal(0)})
+                aggregate['quantity'] += h['quantity']
+                aggregate['total'] += h['total']
+        allocation_holdings = []
+        for code in sorted(ledger_positions.keys() | pool_positions.keys()):
+            recorded, aggregate = ledger_positions.get(code), pool_positions.get(code)
+            pool_quantity = aggregate['quantity'] if aggregate else 0
+            pool_cost = format(aggregate['total']/pool_quantity,'.4f') if pool_quantity else None
+            same = bool(recorded and aggregate and recorded['quantity']==pool_quantity and recorded['cost']==pool_cost)
+            allocation_holdings.append({'code':code,'name':recorded['name'] if recorded else code,'account_quantity':recorded['quantity'] if recorded else 0,
+                                        'pool_quantity':pool_quantity,'account_cost':recorded['cost'] if recorded else None,'pool_cost':pool_cost,'matches':same})
+        allocation = {'account_cash':account['cash'],'pool_cash':fmt(cents(pool_cash)),'unallocated_cash':account['unallocated_cash'],
+                      'pools':account['pools'],'holdings':allocation_holdings,
+                      'matches':Decimal(account['cash'])==pool_cash+Decimal(account['unallocated_cash']) and all(h['matches'] for h in allocation_holdings)}
+        return {'matches':broker_matches and allocation['matches'],'broker_comparison':{'matches':broker_matches,'cash':cash_result,'holdings':rows},'allocation_comparison':allocation,
+                'cost_note':'账本成本参考同花顺模拟炒股近似口径，尚未证实与真实交易端一致；费用、清仓重买及券商口径差异可能导致成本不同。资产池成本按数量加权汇总。'}
 
     def replay(self, db, ident):
         a=get(db,'accounts',ident,'账户')
