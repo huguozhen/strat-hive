@@ -117,9 +117,60 @@ class TradeTest(unittest.TestCase):
         self.assertIsNone(migrated.execute('account.get',{'id':self.a})['opened_at'])
         trade={'run_id':self.r,'security':'510300','direction':'buy','time':'2026-01-02T10:00','price':'1','quantity':1,'commission':'0'}
         with self.assertRaisesRegex(LedgerError,'时点未知'):
+            migrated.execute('cash.move',{'account_id':self.a,'direction':'in','amount':'1','time':'2026-01-02T10:00'})
+        with self.assertRaisesRegex(LedgerError,'时点未知'):
             migrated.execute('trade.create',trade)
         migrated.execute('account.update',{'id':self.a,'opened_at':'2025-01-01T00:00'})
         ident=migrated.execute('trade.create',trade)['id']
         with self.assertRaisesRegex(LedgerError,'晚于已有成交'):
             migrated.execute('account.update',{'id':self.a,'opened_at':'2026-01-03T00:00'})
         self.assertEqual(migrated.execute('trade.get',{'id':ident})['quantity'],1)
+
+    def test_account_cost_replays_separately_from_pool_cost(self):
+        strategy=self.l.execute('strategy.create',{'name':'第二策略'})['id']
+        p2=self.l.execute('pool.create',{'account_id':self.a,'name':'第二池'})['id']
+        r2=self.l.execute('run.create',{'strategy_id':strategy,'pool_id':p2,'name':'第二运行'})['id']
+        self.l.execute('cash.move',{'account_id':self.a,'pool_id':p2,'direction':'in','amount':'2000','time':'2026-01-01T10:00'})
+        for run in (self.r,r2):
+            self.l.execute('trade.create',{'run_id':run,'security':'510300','direction':'buy','time':'2026-01-02T10:00','price':'10','quantity':100,'commission':'0','stamp_tax':'0','transfer_fee':'0'})
+        self.l.execute('trade.create',{'run_id':self.r,'security':'510300','direction':'sell','time':'2026-01-03T10:00','price':'20','quantity':100,'commission':'0','stamp_tax':'0','transfer_fee':'0'})
+        view=self.l.execute('account.get',{'id':self.a})
+        self.assertEqual((view['holdings'][0]['quantity'],view['holdings'][0]['cost']),(100,'0.0000'))
+        self.assertEqual(view['pools'][1]['holdings'][0]['cost'],'10.0000')
+
+    def test_recorded_estimates_survive_metadata_edits_and_reprice_on_amount_change(self):
+        self.l.execute('account.update',{'id':self.a,'commission_rate':'0.001'})
+        trade=self.l.execute('trade.create',{'run_id':self.r,'security':'510300','direction':'buy','time':'2026-01-02T10:00','price':'10','quantity':10})['id']
+        self.l.execute('account.update',{'id':self.a,'commission_rate':'0.1'})
+        self.l.execute('trade.update',{'id':trade,'note':'补记说明'})
+        self.assertEqual(self.l.execute('trade.get',{'id':trade})['commission'],'5.00')
+        self.l.execute('trade.update',{'id':trade,'price':'11'})
+        self.assertEqual(self.l.execute('trade.get',{'id':trade})['commission'],'11.00')
+        self.l.execute('trade.update',{'id':trade,'commission':'2'})
+        self.l.execute('trade.update',{'id':trade,'price':'12'})
+        self.assertEqual(self.l.execute('trade.get',{'id':trade})['commission'],'2.00')
+        self.l.execute('trade.update',{'id':trade,'commission':''})
+        self.assertEqual(self.l.execute('trade.get',{'id':trade})['commission'],'12.00')
+
+    def test_cash_cannot_precede_opening_and_opening_cannot_cross_existing_cash(self):
+        before=self.l.execute('account.get',{'id':self.a})
+        with self.assertRaisesRegex(LedgerError,'建账'):
+            self.l.execute('cash.move',{'account_id':self.a,'direction':'in','amount':'10','time':'2024-12-31T10:00'})
+        self.assertEqual(self.l.execute('account.get',{'id':self.a}),before)
+        with self.assertRaisesRegex(LedgerError,'资金'):
+            self.l.execute('account.update',{'id':self.a,'opened_at':'2026-01-02T00:00'})
+        self.assertEqual(self.l.execute('account.get',{'id':self.a})['opened_at'],'2025-01-01T00:00:00.000000')
+
+    def test_historical_stock_fees_follow_verified_dates_or_require_override(self):
+        a=self.l.execute('account.create',{'name':'历史账户','cash':'0','commission_rate':'0.0003','opened_at':'2022-07-01T00:00'})['id']
+        s=self.l.execute('strategy.create',{'name':'历史策略'})['id']
+        p=self.l.execute('pool.create',{'account_id':a,'name':'历史池'})['id']
+        r=self.l.execute('run.create',{'strategy_id':s,'pool_id':p,'name':'历史运行'})['id']
+        self.l.execute('initial.record',{'account_id':a,'holdings':[{'security':'600000','quantity':2000,'cost':'5','date':'2020-01-01','allocations':[{'pool_id':p,'quantity':2000}]}]})
+        sale={'run_id':r,'security':'600000','direction':'sell','time':'2023-02-01T10:00','price':'10','quantity':1000}
+        with self.assertRaisesRegex(LedgerError,'过户费'):
+            self.l.execute('trade.create',sale)
+        first=self.l.execute('trade.create',{**sale,'transfer_fee':'0.20'})['id']
+        self.assertEqual(self.l.execute('trade.get',{'id':first})['stamp_tax'],'10.00')
+        second=self.l.execute('trade.create',{**sale,'time':'2023-08-28T10:00','transfer_fee':'0.10'})['id']
+        self.assertEqual(self.l.execute('trade.get',{'id':second})['stamp_tax'],'5.00')
