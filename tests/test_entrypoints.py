@@ -87,3 +87,29 @@ class EntryPointsTest(unittest.TestCase):
                 self.assertEqual(l.execute('account.get',{'id':a})['cash'],'800.00')
             finally:
                 server.shutdown();server.server_close();thread.join()
+
+    def test_reconciliation_through_web_and_cli_import(self):
+        from strathive.ledger import Ledger
+        import urllib.error
+        with tempfile.TemporaryDirectory() as d:
+            db=str(Path(d)/'ledger.db'); ledger=Ledger(db)
+            account=ledger.execute('account.create',{'name':'券商','commission_rate':'0','cash':'50'})['id']
+            payload={'account_id':account,'broker':{'cash':'50','holdings':[]}}
+            path=Path(d)/'broker.json'; path.write_text(json.dumps(payload),encoding='utf-8')
+            before=ledger.execute('account.get',{'id':account})
+            result=subprocess.run([sys.executable,'-m','strathive','--db',db,'reconcile','--json','@'+str(path)],capture_output=True,text=True,check=True)
+            self.assertTrue(json.loads(result.stdout)['matches'])
+            server=make_server('127.0.0.1',0,db); thread=threading.Thread(target=server.serve_forever,daemon=True); thread.start()
+            base=f'http://127.0.0.1:{server.server_port}'
+            try:
+                with urllib.request.urlopen(base+'/') as response:
+                    self.assertIn('即时对账',response.read().decode())
+                request=urllib.request.Request(base+'/api/reconcile',data=json.dumps(payload).encode(),headers={'Content-Type':'application/json'},method='POST')
+                with urllib.request.urlopen(request) as response: self.assertTrue(json.load(response)['matches'])
+                bad={'account_id':account,'broker':{'cash':'-1','holdings':[]}}
+                request=urllib.request.Request(base+'/api/reconcile',data=json.dumps(bad).encode(),headers={'Content-Type':'application/json'},method='POST')
+                with self.assertRaises(urllib.error.HTTPError) as err: urllib.request.urlopen(request)
+                self.assertIn('现金',json.load(err.exception)['error']); err.exception.close()
+                self.assertEqual(ledger.execute('account.get',{'id':account}),before)
+            finally:
+                server.shutdown(); server.server_close(); thread.join()
