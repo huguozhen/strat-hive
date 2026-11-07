@@ -174,3 +174,51 @@ class TradeTest(unittest.TestCase):
         self.assertEqual(self.l.execute('trade.get',{'id':first})['stamp_tax'],'10.00')
         second=self.l.execute('trade.create',{**sale,'time':'2023-08-28T10:00','transfer_fee':'0.10'})['id']
         self.assertEqual(self.l.execute('trade.get',{'id':second})['stamp_tax'],'5.00')
+
+    def test_initial_holding_date_cannot_be_after_opening_date(self):
+        account=self.l.execute('account.create',{'name':'初始状态','cash':'0','commission_rate':'0','opened_at':'2026-01-01T09:30'})['id']
+        strategy=self.l.execute('strategy.create',{'name':'初始策略'})['id']
+        pool=self.l.execute('pool.create',{'account_id':account,'name':'初始池'})['id']
+        self.l.execute('run.create',{'strategy_id':strategy,'pool_id':pool,'name':'初始运行'})
+        initial={'account_id':account,'holdings':[{'security':'600000','quantity':100,'cost':'8','date':'2026-01-02','allocations':[{'pool_id':pool,'quantity':100}]}]}
+        with self.assertRaisesRegex(LedgerError,'持仓日期.*建账'):
+            self.l.execute('initial.record',initial)
+        self.assertFalse(self.l.execute('account.get',{'id':account})['setup_complete'])
+        self.assertEqual(self.l.execute('account.get',{'id':account})['holdings'],[])
+
+    def test_legacy_initial_holding_is_available_at_opening_even_if_recorded_date_is_later(self):
+        import sqlite3
+        a=self.l.execute('account.create',{'name':'旧快照','cash':'0','commission_rate':'0','opened_at':'2026-01-01T09:30'})['id']
+        s=self.l.execute('strategy.create',{'name':'快照策略'})['id']
+        p=self.l.execute('pool.create',{'account_id':a,'name':'快照池'})['id']
+        r=self.l.execute('run.create',{'strategy_id':s,'pool_id':p,'name':'快照运行'})['id']
+        self.l.execute('initial.record',{'account_id':a,'holdings':[{'security':'510300','quantity':100,'cost':'10','date':'2025-01-01','allocations':[{'pool_id':p,'quantity':100}]}]})
+        # Previous versions accepted a future holding date; model such an existing database.
+        with sqlite3.connect(self.path) as db:
+            db.execute('UPDATE holdings SET date=? WHERE account_id=?',('2026-01-02',a))
+        sale={'run_id':r,'security':'510300','direction':'sell','time':'2026-01-01T09:30','price':'12','quantity':50,'commission':'0','stamp_tax':'0','transfer_fee':'0'}
+        self.l.execute('trade.create',sale)
+        view=self.l.execute('account.get',{'id':a})
+        self.assertEqual((view['holdings'][0]['quantity'],view['holdings'][0]['cost']),(50,'8.0000'))
+        self.assertEqual(view['pools'][0]['holdings'][0]['date'],'2026-01-02')
+
+    def test_opening_snapshot_handles_distinct_dates_securities_and_pool_costs(self):
+        a=self.l.execute('account.create',{'name':'快照账户','cash':'0','commission_rate':'0','opened_at':'2026-01-01T09:30'})['id']
+        s=self.l.execute('strategy.create',{'name':'快照策略'})['id']
+        pools=[self.l.execute('pool.create',{'account_id':a,'name':name})['id'] for name in ('甲池','乙池')]
+        runs=[self.l.execute('run.create',{'strategy_id':s,'pool_id':p,'name':'运行'})['id'] for p in pools]
+        self.l.execute('initial.record',{'account_id':a,'holdings':[
+            {'security':'600000','quantity':100,'cost':'10','date':'2020-05-01','allocations':[{'pool_id':pools[0],'quantity':60},{'pool_id':pools[1],'quantity':40}]},
+            {'security':'510300','quantity':100,'cost':'5','date':'2026-01-01','allocations':[{'pool_id':pools[1],'quantity':100}]}]})
+        sale={'run_id':runs[0],'security':'600000','direction':'sell','time':'2026-01-01T09:30','price':'20','quantity':60,'commission':'0','stamp_tax':'0','transfer_fee':'0'}
+        with self.assertRaisesRegex(LedgerError,'建账'):
+            self.l.execute('trade.create',{**sale,'time':'2026-01-01T09:29'})
+        self.l.execute('trade.create',sale)
+        view=self.l.execute('account.get',{'id':a})
+        self.assertEqual([(h['code'],h['quantity'],h['cost']) for h in view['holdings']],[('510300',100,'5.0000'),('600000',40,'-5.0000')])
+        self.assertEqual(view['cash'],'1200.00')
+        self.assertEqual(view['pools'][0]['holdings'],[])
+        self.assertEqual([(h['code'],h['quantity'],h['cost'],h['date']) for h in view['pools'][1]['holdings']],[('600000',40,'10.0000','2020-05-01'),('510300',100,'5.0000','2026-01-01')])
+        with self.assertRaisesRegex(LedgerError,'持仓日期.*建账'):
+            self.l.execute('account.update',{'id':a,'opened_at':'2025-12-31T09:30'})
+        self.assertEqual(self.l.execute('account.get',{'id':a}),view)
