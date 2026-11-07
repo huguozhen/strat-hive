@@ -101,3 +101,20 @@ class ReconciliationTest(unittest.TestCase):
         self.assertEqual((allocation['holdings'][0]['pool_cost'],allocation['holdings'][0]['pool_quantity']),('7.5000',200))
         self.assertEqual([p['holdings'][0]['quantity'] for p in allocation['pools']],[140,60])
         self.assertIn('同花顺',result['cost_note'])
+
+    def test_account_and_pool_cost_cycles_can_differ_without_breaking_allocation(self):
+        l=self.ledger
+        account=l.execute('account.create',{'name':'分池','cash':'0','commission_rate':'0','opened_at':'2025-01-01T00:00'})['id']
+        strategy=l.execute('strategy.create',{'name':'策略二'})['id']
+        pools=[l.execute('pool.create',{'account_id':account,'name':name})['id'] for name in ('池一','池二')]
+        runs=[l.execute('run.create',{'strategy_id':strategy,'pool_id':p,'name':str(p)})['id'] for p in pools]
+        l.execute('initial.record',{'account_id':account,'holdings':[{'security':'600000','quantity':200,'cost':'10','date':'2025-01-01','allocations':[{'pool_id':pools[0],'quantity':100},{'pool_id':pools[1],'quantity':100}]}]})
+        l.execute('trade.create',{'run_id':runs[0],'security':'600000','direction':'sell','time':'2025-01-02T10:00','price':'12','quantity':100,'commission':'0','stamp_tax':'0','transfer_fee':'0'})
+        broker={'cash':'1200','holdings':[{'code':'600000','quantity':100,'cost':'8'}]}
+        result=l.execute('reconcile',{'account_id':account,'broker':broker})
+        self.assertTrue(result['matches'])
+        row=result['allocation_comparison']['holdings'][0]
+        self.assertEqual((row['account_cost'],row['pool_cost']),('8.0000','10.0000'))
+        self.assertTrue(row['matches'])
+        self.assertFalse(row['cost_matches'])
+        self.assertEqual(row['cost_difference'],'-2.0000')

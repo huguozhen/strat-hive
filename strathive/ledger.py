@@ -37,6 +37,11 @@ def timestamp(value):
     except (ValueError, TypeError):
         raise LedgerError('时间须为 ISO 日期及时间，例如 2026-01-02T10:00:00')
 
+def cash_timestamp(value):
+    # Legacy SQLite CURRENT_TIMESTAMP values use UTC with a space separator.
+    if ' ' in value and 'T' not in value: value = value.replace(' ','T') + '+00:00'
+    return timestamp(value)
+
 def cents(value):
     return str(value * 100)
 
@@ -106,6 +111,7 @@ class Ledger:
             name = required({'name':data.get('name',account['name'])}, 'name')
             opened_at=timestamp(data['opened_at']) if data.get('opened_at') else account['opened_at']
             if opened_at and db.execute('SELECT 1 FROM trades JOIN runs ON runs.id=trades.run_id JOIN pools ON pools.id=runs.pool_id WHERE pools.account_id=? AND trades.time<? LIMIT 1',(account['id'],opened_at)).fetchone(): raise LedgerError('建账时点晚于已有成交，请检查输入')
+            if opened_at and any(cash_timestamp(r['created_at']) < opened_at for r in db.execute('SELECT created_at FROM cash_events WHERE account_id=?',(account['id'],))): raise LedgerError('建账时点晚于已有资金操作，请检查输入')
             db.execute('UPDATE accounts SET name=?,commission_rate=?,opened_at=? WHERE id=?',(name,rate,opened_at,account['id']))
             return {'id':account['id']}
         if action == 'account.list':
@@ -205,6 +211,8 @@ class Ledger:
             if pool and pool['account_id'] != a['id']: raise LedgerError('资产池不属于该账户')
             if direction not in ('in','out'): raise LedgerError('方向须为 in 或 out')
             when = timestamp(data.get('time') or datetime.datetime.now().isoformat())
+            if not a['opened_at']: raise LedgerError('该旧账户的建账时点未知，请先在账户信息中确认建账时点')
+            if when < a['opened_at']: raise LedgerError('资金操作时间早于账户建账时点')
             db.execute('UPDATE accounts SET setup_complete=1 WHERE id=?',(a['id'],))
             db.execute('INSERT INTO cash_events(account_id,pool_id,direction,amount,created_at) VALUES(?,?,?,?,?)',(a['id'],pool['id'] if pool else None,direction,amount,when))
             self.replay(db,a['id'])
@@ -233,19 +241,28 @@ class Ledger:
             price = decimal(row.get('price'),'成交价格',places=4)
             n = quantity(row.get('quantity')); amount = price * n
             # These are clearly labelled estimates; the receipt values can override each fee.
-            estimate = {'commission':max(Decimal('5'),rounded(amount * Decimal(account['commission_rate']))),
-                        'stamp_tax':rounded(amount * Decimal('0.0005')) if sec[0]['type']=='stock' and direction=='sell' else Decimal('0.00'),
-                        'transfer_fee':rounded(amount * Decimal('0.00001')) if sec[0]['type']=='stock' else Decimal('0.00')}
+            day=when[:10]
+            stock=sec[0]['type']=='stock'
+            if day < '2002-05-01': commission=None
+            else: commission=max(Decimal('5'),rounded(amount * Decimal(account['commission_rate'])))
+            if day < '2022-07-01': stamp=None
+            elif stock and direction=='sell': stamp=rounded(amount * (Decimal('0.0005') if day >= '2023-08-28' else Decimal('0.001')))
+            else: stamp=Decimal('0.00')
+            transfer=rounded(amount * Decimal('0.00001')) if stock and day >= '2026-01-01' else (Decimal('0.00') if not stock and day >= '2022-07-01' else None)
+            estimate = {'commission':commission,'stamp_tax':stamp,'transfer_fee':transfer}
             import json
             previous_basis = json.loads(old['fee_basis']) if old else {}
-            fees = {}
+            changed = bool(old and (old_account_id != account['id'] or old['code'] != sec[0]['code'] or old['direction'] != direction or old['time'] != when or Decimal(old['price']) != price or old['quantity'] != n))
+            fees = {}; basis = {}
             for key in estimate:
                 raw = data.get(key)
-                # Explicitly blank removes an override; unchanged updates preserve recorded fees.
-                if raw not in (None,''): fees[key] = decimal(raw,key,True,2)
-                elif old and key not in data and previous_basis.get(key) == 'manual': fees[key] = Decimal(old[key])
-                else: fees[key] = estimate[key]
-            basis = {k: ('manual' if data.get(k) not in (None,'') or (old and k not in data and previous_basis.get(k) == 'manual') else 'estimate') for k in estimate}
+                if raw not in (None,''):
+                    fees[key] = decimal(raw,key,True,2); basis[key] = 'manual'
+                elif old and key not in data and (previous_basis.get(key) == 'manual' or not changed):
+                    fees[key] = Decimal(old[key]); basis[key] = previous_basis.get(key,'manual')
+                else:
+                    if estimate[key] is None: raise LedgerError(f'该日期的{ {"commission":"佣金","stamp_tax":"印花税","transfer_fee":"过户费"}[key]}规则尚未核实，请按交割单手动输入')
+                    fees[key] = estimate[key]; basis[key] = 'estimate'
             fields = (run['id'],sec[0]['code'],sec[0]['name'],sec[0]['type'],direction,when,str(price),n,str(amount),*(format(fees[k],'.2f') for k in ('commission','stamp_tax','transfer_fee')),str(row.get('reason','')).strip(),str(row.get('note','')).strip(),json.dumps(basis))
             if old:
                 db.execute('UPDATE trades SET run_id=?,code=?,name=?,type=?,direction=?,time=?,price=?,quantity=?,amount=?,commission=?,stamp_tax=?,transfer_fee=?,reason=?,note=?,fee_basis=? WHERE id=?',(*fields,old['id']))
@@ -311,7 +328,7 @@ class Ledger:
         cash_result = {'broker':str(cash),'account':account['cash'],'difference':str(cash-Decimal(account['cash'])),'matches':cash==Decimal(account['cash'])}
         broker_matches = cash_result['matches'] and all(r['status']=='match' for r in rows)
         pool_cash = sum((Decimal(p['cash']) for p in account['pools']), Decimal(0))
-        _, state = self.replay(db, account['id'])
+        _, state, _ = self.replay(db, account['id'])
         pool_positions = {}
         for pool in state.values():
             for h in pool['holdings'].values():
@@ -324,27 +341,27 @@ class Ledger:
             recorded, aggregate = ledger_positions.get(code), pool_positions.get(code)
             pool_quantity = aggregate['quantity'] if aggregate else 0
             pool_cost = format(aggregate['total']/pool_quantity,'.4f') if pool_quantity else None
-            same = bool(recorded and aggregate and recorded['quantity']==pool_quantity and recorded['cost']==pool_cost)
+            same = bool(recorded and aggregate and recorded['quantity']==pool_quantity)
+            cost_matches = bool(recorded and aggregate and recorded['cost']==pool_cost)
             allocation_holdings.append({'code':code,'name':recorded['name'] if recorded else code,'account_quantity':recorded['quantity'] if recorded else 0,
-                                        'pool_quantity':pool_quantity,'account_cost':recorded['cost'] if recorded else None,'pool_cost':pool_cost,'matches':same})
+                                        'pool_quantity':pool_quantity,'account_cost':recorded['cost'] if recorded else None,'pool_cost':pool_cost,'matches':same,
+                                        'cost_matches':cost_matches,'cost_difference':format(Decimal(recorded['cost'])-Decimal(pool_cost),'.4f') if recorded and pool_cost is not None else None})
         allocation = {'account_cash':account['cash'],'pool_cash':fmt(cents(pool_cash)),'unallocated_cash':account['unallocated_cash'],
                       'pools':account['pools'],'holdings':allocation_holdings,
                       'matches':Decimal(account['cash'])==pool_cash+Decimal(account['unallocated_cash']) and all(h['matches'] for h in allocation_holdings)}
         return {'matches':broker_matches and allocation['matches'],'broker_comparison':{'matches':broker_matches,'cash':cash_result,'holdings':rows},'allocation_comparison':allocation,
-                'cost_note':'账本成本参考同花顺模拟炒股近似口径，尚未证实与真实交易端一致；费用、清仓重买及券商口径差异可能导致成本不同。资产池成本按数量加权汇总。'}
+                'cost_note':'账本成本参考同花顺模拟炒股近似口径，尚未证实与真实交易端一致；费用、清仓重买及券商口径差异可能导致成本不同。账户与池独立计算，池成本按数量加权汇总；池清仓而账户未清仓时两者成本可以不同，资产分配一致性以现金及数量为准。'}
 
     def replay(self, db, ident):
         a=get(db,'accounts',ident,'账户')
         pools={p['id']:{'cash':Decimal(0),'holdings':{}} for p in db.execute('SELECT * FROM pools WHERE account_id=?',(ident,))}
         unallocated=Decimal(a['initial_cash']) / 100
+        account_holdings={}
         events=[]
         for h in db.execute('SELECT * FROM holdings WHERE account_id=?',(ident,)):
             events.append((timestamp(h['date']),0,h['id'],'holding',h))
         for c in db.execute('SELECT * FROM cash_events WHERE account_id=?',(ident,)):
-            # The original schema wrote SQLite CURRENT_TIMESTAMP in UTC, with a space.
-            created = c['created_at']
-            if ' ' in created and 'T' not in created: created = created.replace(' ','T') + '+00:00'
-            events.append((timestamp(created),1,c['id'],'cash',c))
+            events.append((cash_timestamp(c['created_at']),1,c['id'],'cash',c))
         for t in db.execute('SELECT trades.*,runs.pool_id FROM trades JOIN runs ON runs.id=trades.run_id JOIN pools ON pools.id=runs.pool_id WHERE pools.account_id=?',(ident,)):
             events.append((timestamp(t['time']),2,t['id'],'trade',t))
         for when,_,__,kind,row in sorted(events,key=lambda x:x[:3]):
@@ -357,35 +374,39 @@ class Ledger:
                 if row['pool_id'] and pools[row['pool_id']]['cash'] < 0: raise LedgerError(f'{when} 的资金操作导致资产池现金不足，请检查后续记录')
             else:
                 p=pools[row['pool_id']]; hs=p['holdings']; h=hs.setdefault(row['code'],{'code':row['code'],'name':row['name'],'quantity':0,'total':Decimal(0),'date':when[:10]})
+                ah=account_holdings.setdefault(row['code'],{'code':row['code'],'name':row['name'],'quantity':0,'total':Decimal(0)})
                 if kind=='holding':
                     h['quantity']+=row['quantity']; h['total']+=Decimal(row['cost'])*row['quantity']
+                    ah['quantity']+=row['quantity']; ah['total']+=Decimal(row['cost'])*row['quantity']
                 else:
                     fees=sum(Decimal(row[k]) for k in ('commission','stamp_tax','transfer_fee')); amount=Decimal(row['amount']); n=row['quantity']
                     if row['direction']=='buy':
                         p['cash']-=amount+fees; h['quantity']+=n; h['total']+=amount+fees
+                        ah['quantity']+=n; ah['total']+=amount+fees
                         if p['cash']<0: raise LedgerError(f'{when} 的买入导致资产池现金不足，请检查交易和后续资金记录')
                     else:
                         if h['quantity']<n: raise LedgerError(f'{when} 的卖出超过资产池持仓，请检查交易和后续记录')
                         p['cash']+=amount-fees; h['quantity']-=n; h['total']-=amount-fees
+                        ah['quantity']-=n; ah['total']-=amount-fees
+                        if not ah['quantity']: ah['total']=Decimal(0)
                         if p['cash']<0: raise LedgerError(f'{when} 的卖出费用导致资产池现金不足')
                         if not h['quantity']: h['total']=Decimal(0)
-        return unallocated, pools
+        return unallocated, pools, account_holdings
 
     def account(self, db, ident):
         a=get(db,'accounts',ident,'账户')
-        unallocated,state=self.replay(db,a['id'])
-        pools=[]; grouped={}
+        unallocated,state,grouped=self.replay(db,a['id'])
+        pools=[]
         for p in db.execute('SELECT * FROM pools WHERE account_id=? ORDER BY id',(a['id'],)).fetchall():
             runs=[dict(r) for r in db.execute('SELECT * FROM runs WHERE pool_id=? ORDER BY id',(p['id'],))]
             holdings=[]
             for h in state[p['id']]['holdings'].values():
                 if not h['quantity']: continue
                 holdings.append({'code':h['code'],'name':h['name'],'quantity':h['quantity'],'cost':format(h['total']/h['quantity'],'.4f'),'date':h['date']})
-                g=grouped.setdefault(h['code'],{'code':h['code'],'name':h['name'],'quantity':0,'total':Decimal(0)})
-                g['quantity']+=h['quantity']; g['total']+=h['total']
             pools.append({'id':p['id'],'name':p['name'],'cash':fmt(cents(state[p['id']]['cash'])),'runs':runs,'holdings':holdings})
         holdings=[]
         for h in grouped.values():
+            if not h['quantity']: continue
             h['cost']=format(h.pop('total')/h['quantity'],'.4f'); holdings.append(h)
         holdings.sort(key=lambda h:h['code'])
         return {'id':a['id'],'name':a['name'],'commission_rate':a['commission_rate'],'opened_at':a['opened_at'],'setup_complete':bool(a['setup_complete']),'initial_cash':fmt(a['initial_cash']),'cash':fmt(cents(unallocated+sum((p['cash'] for p in state.values()),Decimal(0)))),'unallocated_cash':fmt(cents(unallocated)),'pools':pools,'holdings':holdings}
