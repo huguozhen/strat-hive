@@ -13,7 +13,12 @@ def make_server(host, port, path):
             self.send_response(status); self.send_header('Content-Type',content_type); self.send_header('Content-Length',str(len(body))); self.send_header('X-Content-Type-Options','nosniff'); self.end_headers(); self.wfile.write(body)
         def json_reply(self,status,data):
             self.reply(status,json.dumps(data,ensure_ascii=False).encode(),'application/json; charset=utf-8')
+        def valid_host(self):
+            if self.headers.get('Host', '').lower() not in (f'127.0.0.1:{self.server.server_port}', f'localhost:{self.server.server_port}'):
+                self.json_reply(403,{'error':'请求主机不被允许'}); return False
+            return True
         def do_GET(self):
+            if not self.valid_host(): return
             path = urlsplit(self.path).path
             if path.startswith('/api/'):
                 try: self.json_reply(200,ledger.execute(unquote(path[5:])))
@@ -24,6 +29,7 @@ def make_server(host, port, path):
             target=STATIC/files[path]
             self.reply(200,target.read_bytes(),{'/':'text/html; charset=utf-8','/app.js':'text/javascript; charset=utf-8','/style.css':'text/css; charset=utf-8'}[path])
         def do_POST(self):
+            if not self.valid_host(): return
             path = urlsplit(self.path).path
             origin = self.headers.get('Origin')
             if origin and origin not in (f'http://127.0.0.1:{self.server.server_port}',f'http://localhost:{self.server.server_port}'):
