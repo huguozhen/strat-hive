@@ -110,6 +110,7 @@ class Ledger:
             if Decimal(rate) > 1: raise LedgerError('佣金费率不能大于 1')
             name = required({'name':data.get('name',account['name'])}, 'name')
             opened_at=timestamp(data['opened_at']) if data.get('opened_at') else account['opened_at']
+            if data.get('opened_at') and any(datetime.date.fromisoformat(h['date']).isoformat() > opened_at[:10] for h in db.execute('SELECT date FROM holdings WHERE account_id=?',(account['id'],))): raise LedgerError('持仓日期不能晚于账户建账日期')
             if opened_at and db.execute('SELECT 1 FROM trades JOIN runs ON runs.id=trades.run_id JOIN pools ON pools.id=runs.pool_id WHERE pools.account_id=? AND trades.time<? LIMIT 1',(account['id'],opened_at)).fetchone(): raise LedgerError('建账时点晚于已有成交，请检查输入')
             if opened_at and any(cash_timestamp(r['created_at']) < opened_at for r in db.execute('SELECT created_at FROM cash_events WHERE account_id=?',(account['id'],))): raise LedgerError('建账时点晚于已有资金操作，请检查输入')
             db.execute('UPDATE accounts SET name=?,commission_rate=?,opened_at=? WHERE id=?',(name,rate,opened_at,account['id']))
@@ -180,6 +181,7 @@ class Ledger:
         if action == 'initial.record':
             account = get(db,'accounts',data.get('account_id'),'账户')
             if account['setup_complete']: raise LedgerError('初始建账已完成，不能再次录入初始持仓')
+            if not account['opened_at']: raise LedgerError('该旧账户的建账时点未知，请先在账户信息中确认建账时点')
             items = data.get('holdings')
             if not isinstance(items,list) or not items: raise LedgerError('请填写初始持仓')
             for item in items:
@@ -187,8 +189,9 @@ class Ledger:
                 if len(sec)!=1: raise LedgerError('本地目录未收录或名称不唯一，请检查代码或更新证券资料')
                 n = quantity(item.get('quantity')); cost = str(decimal(item.get('cost'),'成本价',True,4))
                 date = required(item,'date')
-                try: datetime.date.fromisoformat(date)
+                try: date = datetime.date.fromisoformat(date).isoformat()
                 except ValueError: raise LedgerError('持仓日期须为 YYYY-MM-DD')
+                if date > account['opened_at'][:10]: raise LedgerError('持仓日期不能晚于账户建账日期')
                 allocations = item.get('allocations')
                 if not isinstance(allocations,list) or not allocations: raise LedgerError('每只证券须完整分配至资产池')
                 if sum(quantity(x.get('quantity')) for x in allocations) != n: raise LedgerError('分配数量之和必须等于持仓数量')
@@ -304,7 +307,7 @@ class Ledger:
         account_holdings={}
         events=[]
         for h in db.execute('SELECT * FROM holdings WHERE account_id=?',(ident,)):
-            events.append((timestamp(h['date']),0,h['id'],'holding',h))
+            events.append((a['opened_at'] or '0001-01-01T00:00:00.000000',0,h['id'],'holding',h))
         for c in db.execute('SELECT * FROM cash_events WHERE account_id=?',(ident,)):
             events.append((cash_timestamp(c['created_at']),1,c['id'],'cash',c))
         for t in db.execute('SELECT trades.*,runs.pool_id FROM trades JOIN runs ON runs.id=trades.run_id JOIN pools ON pools.id=runs.pool_id WHERE pools.account_id=?',(ident,)):
@@ -318,7 +321,7 @@ class Ledger:
                 if unallocated < 0: raise LedgerError(f'{when} 的资金操作导致未分配现金不足，请检查后续记录')
                 if row['pool_id'] and pools[row['pool_id']]['cash'] < 0: raise LedgerError(f'{when} 的资金操作导致资产池现金不足，请检查后续记录')
             else:
-                p=pools[row['pool_id']]; hs=p['holdings']; h=hs.setdefault(row['code'],{'code':row['code'],'name':row['name'],'quantity':0,'total':Decimal(0),'date':when[:10]})
+                p=pools[row['pool_id']]; hs=p['holdings']; h=hs.setdefault(row['code'],{'code':row['code'],'name':row['name'],'quantity':0,'total':Decimal(0),'date':row['date'] if kind=='holding' else when[:10]})
                 ah=account_holdings.setdefault(row['code'],{'code':row['code'],'name':row['name'],'quantity':0,'total':Decimal(0)})
                 if kind=='holding':
                     h['quantity']+=row['quantity']; h['total']+=Decimal(row['cost'])*row['quantity']
