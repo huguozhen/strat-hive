@@ -1,6 +1,6 @@
 # 策略蜂巢
 
-单人本地策略运行账本：记录实际资产账户、策略、资产池和初始资产归属。当前交付建账及资金管理，不提供行情、自动下单或交易录入。需要 Python 3.10 或更新版本，无第三方运行依赖。
+单人本地策略运行账本：记录实际资产账户、策略、资产池和初始资产归属。支持建账、资金管理和真实成交记录，不提供行情或自动下单。需要 Python 3.10 或更新版本，无第三方运行依赖。
 
 ## 启动
 
@@ -17,7 +17,7 @@ python -m strathive serve
 3. 在资产分配页面逐条加入**全部**存量持仓，每只证券的数量须完整分配给本账户一个或多个已有运行的池，然后一次保存。保存是原子操作，不生成历史买入。全部保存后不能再次添加初始持仓。
 4. 资金进出及池内外划转会结束初始建账；如有存量持仓请先保存。外部转出和池划入受未分配现金限制，池划出受池现金限制。
 
-账户与池显示的是账本现金，未计算冻结资金或券商可用资金。账户持仓成本以初始持仓的数量加权，资产池展示初始成本及日期；不显示需要行情的市值和收益。
+账户与池显示的是账本现金，未计算冻结资金或券商可用资金；不显示需要行情的市值和收益。资金操作可填写发生时间（不填为当前时间），不带时区的输入按运行账本的本机时间解释；带时区的输入换算为本机时间。补录成交前请确保对应资金已按时间划入。建账目前没有单独记录建账时点，用户须自行确保成交发生于建账之后。修改和删除成交会按时间重放初始持仓、所有资金操作及成交，若任一后续状态为负则整体撤销。相同时间先处理初始持仓，再处理资金操作，最后处理成交；同类记录按记录 ID 排序。
 
 ## 证券资料
 
@@ -57,7 +57,12 @@ python -m strathive run.status --json '{"id":1,"status":"running"}'
 python -m strathive initial.record --json '{"account_id":1,"holdings":[{"security":"600000","quantity":100,"cost":"10.25","date":"2025-01-02","allocations":[{"pool_id":1,"quantity":100}]}]}'
 python -m strathive cash.list --json '{"account_id":1}'
 python -m strathive cash.move --json '{"account_id":1,"direction":"in","amount":"100.00"}'
-python -m strathive cash.move --json '{"account_id":1,"pool_id":1,"direction":"in","amount":"100.00"}'
+python -m strathive cash.move --json '{"account_id":1,"pool_id":1,"direction":"in","amount":"100.00","time":"2026-01-02T09:00:00"}'
+python -m strathive trade.create --json '{"run_id":1,"security":"600000","direction":"buy","time":"2026-01-02T10:00:00","price":"10.00","quantity":10,"commission":"5.00","stamp_tax":"0.00","transfer_fee":"0.00","reason":"计划买入","note":"交割单已核对"}'
+python -m strathive trade.list --json '{"run_id":1,"security":"600000","from":"2026-01-02T00:00:00","to":"2026-01-02T23:59:59"}'
+python -m strathive trade.get --json '{"id":1}'
+python -m strathive trade.update --json '{"id":1,"price":"10.10"}'
+python -m strathive trade.delete --json '{"id":1}'
 ```
 
 `initial.record` 的 `holdings` 数组必须包含该账户全部初始持仓，每条 `allocations` 之和等于对应数量；跨池承接时列出多个池。无持仓账户可以显式运行 `initial.close --json '{"account_id":1}'`，或由首次资金操作结束建账。`cash.move` 不传 `pool_id` 表示外部资金，传入时 `in` 为未分配现金划入池、`out` 为池划回未分配现金。运行状态为 `running`、`paused`、`ended`；结束不可重启，可以在池空闲时创建新的运行。
@@ -67,3 +72,9 @@ python -m strathive cash.move --json '{"account_id":1,"pool_id":1,"direction":"i
 ```sh
 python -m unittest discover -s tests -v
 ```
+
+## 费用与成本口径
+
+成交额精确计算为价格乘整数数量。费用输入留空时为**估算**：按账户佣金费率、每条成交最低 5 元；股票卖出印花税 0.05%，股票双向过户费 0.001%，ETF 二级交易两项为零。分别按四舍五入至分是产品假设，不代表已经核实所有券商的舍入方法；拆单最低佣金、较早历史费率及非普通竞价未核实。估算使用当前费率，不按历史日期推断。佣金可能已包括过户费，实际费用请据交割单分别覆盖，避免重复计入；某项实际为零时填 `0`。成交保存后费用值不会因修改账户费率而改变；修改成交且未手动覆盖的费用会重新估算。详见[一手来源和限制](docs/research/trading-fees.md)。
+
+成本为参考同花顺模拟盘的近似摊薄成本：初始数量乘输入成本为起点，买入加成交额及费用，卖出减去扣费后的回收，除以剩余数量。全部卖出时归零，之后买入重新开始；当日清仓再买的规则尚未证实，不能视为同花顺实盘口径。账户成本由各池剩余成本金额合并后除以账户持仓数量，不能相加单位成本；与券商口径可能不同。详见[成本调研](docs/research/position-cost.md)。运行结束后池若重新绑定新运行，历史运行不展示该池现在的资产；历史成交仍归属于原运行。

@@ -2,7 +2,8 @@
 import datetime
 import re
 import sqlite3
-from decimal import Decimal, InvalidOperation
+from contextlib import closing
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 from pathlib import Path
 
 class LedgerError(ValueError):
@@ -26,10 +27,26 @@ def quantity(value):
     return int(n)
 
 def fmt(value):
-    return f'{value // 100}.{value % 100:02d}'
+    return format(Decimal(str(value)) / 100, '.2f') if Decimal(str(value)) % 1 == 0 else format(Decimal(str(value)) / 100, 'f')
+
+def timestamp(value):
+    try:
+        dt = datetime.datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        if dt.tzinfo is not None: dt = dt.astimezone().replace(tzinfo=None)
+        return dt.isoformat(timespec='microseconds')
+    except (ValueError, TypeError):
+        raise LedgerError('时间须为 ISO 日期及时间，例如 2026-01-02T10:00:00')
+
+def cents(value):
+    return str(value * 100)
+
+def rounded(value):
+    return value.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
 def required(data, name):
-    value = str(data.get(name, '')).strip()
+    raw = data.get(name) if isinstance(data,dict) else None
+    if not isinstance(raw,str): raise LedgerError(f'请填写有效的 {name}')
+    value = raw.strip()
     if not value: raise LedgerError(f'请填写 {name}')
     return value
 
@@ -42,7 +59,7 @@ class Ledger:
     def __init__(self, path):
         self.path = str(path)
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             db.executescript('''
             CREATE TABLE IF NOT EXISTS accounts(id INTEGER PRIMARY KEY, name TEXT NOT NULL, commission_rate TEXT NOT NULL, unallocated INTEGER NOT NULL, initial_cash INTEGER NOT NULL, setup_complete INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS strategies(id INTEGER PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL);
@@ -53,6 +70,7 @@ class Ledger:
             CREATE TABLE IF NOT EXISTS catalog_meta(source TEXT NOT NULL, updated_at TEXT NOT NULL, count INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS holdings(id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL REFERENCES accounts(id), pool_id INTEGER NOT NULL REFERENCES pools(id), code TEXT NOT NULL, name TEXT NOT NULL, quantity INTEGER NOT NULL, cost TEXT NOT NULL, date TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS cash_events(id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL REFERENCES accounts(id), pool_id INTEGER REFERENCES pools(id), direction TEXT NOT NULL, amount INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+            CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL REFERENCES runs(id), code TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL, direction TEXT NOT NULL, time TEXT NOT NULL, price TEXT NOT NULL, quantity INTEGER NOT NULL, amount TEXT NOT NULL, commission TEXT NOT NULL, stamp_tax TEXT NOT NULL, transfer_fee TEXT NOT NULL, reason TEXT NOT NULL, note TEXT NOT NULL, fee_basis TEXT NOT NULL);
             ''')
 
     def connect(self):
@@ -64,7 +82,8 @@ class Ledger:
     def execute(self, action, data=None):
         data = data or {}
         try:
-            with self.connect() as db:
+            with localcontext() as context, closing(self.connect()) as db, db:
+                context.prec = 60
                 db.execute('BEGIN IMMEDIATE')
                 return self._execute(db, action, data)
         except sqlite3.IntegrityError as e:
@@ -117,6 +136,8 @@ class Ledger:
                 if action == 'run.get' and str(row['id']) != str(data.get('id')): continue
                 item = dict(row)
                 item['pool'] = next(p for p in self.account(db, row['account_id'])['pools'] if p['id'] == row['pool_id'])
+                rebound = row['status']=='ended' and db.execute('SELECT 1 FROM runs WHERE pool_id=? AND id>? LIMIT 1',(row['pool_id'],row['id'])).fetchone()
+                if rebound: item['pool'] = {**item['pool'], 'cash':None, 'holdings':[], 'historical':True}
                 results.append(item)
             if action == 'run.get':
                 if not results: raise LedgerError('策略运行不存在')
@@ -177,34 +198,134 @@ class Ledger:
             pool = get(db,'pools',data['pool_id'],'资产池') if data.get('pool_id') else None
             if pool and pool['account_id'] != a['id']: raise LedgerError('资产池不属于该账户')
             if direction not in ('in','out'): raise LedgerError('方向须为 in 或 out')
-            if pool:
-                if direction == 'in' and amount > a['unallocated']: raise LedgerError('未分配现金不足')
-                if direction == 'out' and amount > pool['cash']: raise LedgerError('资产池现金不足')
-                delta = amount if direction == 'in' else -amount
-                db.execute('UPDATE pools SET cash=cash+? WHERE id=?',(delta,pool['id']))
-                db.execute('UPDATE accounts SET unallocated=unallocated-? WHERE id=?',(delta,a['id']))
-            else:
-                if direction == 'out' and amount > a['unallocated']: raise LedgerError('未分配现金不足')
-                db.execute('UPDATE accounts SET unallocated=unallocated+? WHERE id=?',(amount if direction == 'in' else -amount,a['id']))
+            when = timestamp(data.get('time') or datetime.datetime.now().isoformat())
             db.execute('UPDATE accounts SET setup_complete=1 WHERE id=?',(a['id'],))
-            db.execute('INSERT INTO cash_events(account_id,pool_id,direction,amount) VALUES(?,?,?,?)',(a['id'],pool['id'] if pool else None,direction,amount))
+            db.execute('INSERT INTO cash_events(account_id,pool_id,direction,amount,created_at) VALUES(?,?,?,?,?)',(a['id'],pool['id'] if pool else None,direction,amount,when))
+            self.replay(db,a['id'])
             return self.account(db,a['id'])
+        if action in ('trade.create','trade.update'):
+            old = get(db,'trades',data.get('id'),'交易') if action == 'trade.update' else None
+            row = dict(old) if old else {}
+            row.update(data)
+            run = get(db,'runs',row.get('run_id'),'策略运行')
+            pool = get(db,'pools',run['pool_id'],'资产池')
+            account = get(db,'accounts',pool['account_id'],'账户')
+            old_account_id = None
+            if old:
+                old_run = get(db,'runs',old['run_id'],'策略运行')
+                old_account_id = get(db,'pools',old_run['pool_id'],'资产池')['account_id']
+            sec_value = data.get('security',row.get('code'))
+            sec = db.execute('SELECT * FROM securities WHERE code=? OR name=?',(sec_value,sec_value)).fetchall()
+            if len(sec) != 1:
+                if old and sec_value in (old['code'],old['name']): sec = [old]
+                else: raise LedgerError('本地目录未收录或名称不唯一，请检查代码或更新证券资料')
+            direction = row.get('direction')
+            if direction not in ('buy','sell'): raise LedgerError('交易方向须为 buy 或 sell')
+            when = timestamp(row.get('time'))
+            price = decimal(row.get('price'),'成交价格',places=4)
+            n = quantity(row.get('quantity')); amount = price * n
+            # These are clearly labelled estimates; the receipt values can override each fee.
+            estimate = {'commission':max(Decimal('5'),rounded(amount * Decimal(account['commission_rate']))),
+                        'stamp_tax':rounded(amount * Decimal('0.0005')) if sec[0]['type']=='stock' and direction=='sell' else Decimal('0.00'),
+                        'transfer_fee':rounded(amount * Decimal('0.00001')) if sec[0]['type']=='stock' else Decimal('0.00')}
+            import json
+            previous_basis = json.loads(old['fee_basis']) if old else {}
+            fees = {}
+            for key in estimate:
+                raw = data.get(key)
+                # Explicitly blank removes an override; unchanged updates preserve recorded fees.
+                if raw not in (None,''): fees[key] = decimal(raw,key,True,2)
+                elif old and key not in data and previous_basis.get(key) == 'manual': fees[key] = Decimal(old[key])
+                else: fees[key] = estimate[key]
+            basis = {k: ('manual' if data.get(k) not in (None,'') or (old and k not in data and previous_basis.get(k) == 'manual') else 'estimate') for k in estimate}
+            fields = (run['id'],sec[0]['code'],sec[0]['name'],sec[0]['type'],direction,when,str(price),n,str(amount),*(format(fees[k],'.2f') for k in ('commission','stamp_tax','transfer_fee')),str(row.get('reason','')).strip(),str(row.get('note','')).strip(),json.dumps(basis))
+            if old:
+                db.execute('UPDATE trades SET run_id=?,code=?,name=?,type=?,direction=?,time=?,price=?,quantity=?,amount=?,commission=?,stamp_tax=?,transfer_fee=?,reason=?,note=?,fee_basis=? WHERE id=?',(*fields,old['id']))
+                ident=old['id']
+            else:
+                ident=db.execute('INSERT INTO trades(run_id,code,name,type,direction,time,price,quantity,amount,commission,stamp_tax,transfer_fee,reason,note,fee_basis) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',fields).lastrowid
+            db.execute('UPDATE accounts SET setup_complete=1 WHERE id=?',(account['id'],))
+            if old_account_id and old_account_id != account['id']: self.replay(db,old_account_id)
+            self.replay(db,account['id'])
+            return {'id':ident,'warning': ('该运行当前已暂停，已记录补记成交' if run['status']=='paused' else '该运行当前已结束，已记录补记成交' if run['status']=='ended' else '')}
+        if action == 'trade.delete':
+            trade=get(db,'trades',data.get('id'),'交易')
+            run=get(db,'runs',trade['run_id'],'策略运行'); pool=get(db,'pools',run['pool_id'],'资产池')
+            db.execute('DELETE FROM trades WHERE id=?',(trade['id'],))
+            self.replay(db,pool['account_id'])
+            return {'id':trade['id']}
+        if action in ('trade.list','trade.get'):
+            import json
+            rows=db.execute('SELECT trades.*,runs.pool_id,pools.account_id,runs.name AS run_name FROM trades JOIN runs ON runs.id=trades.run_id JOIN pools ON pools.id=runs.pool_id ORDER BY trades.time,trades.id').fetchall()
+            result=[]
+            for r in rows:
+                t=dict(r)
+                if action=='trade.get' and str(t['id'])!=str(data.get('id')): continue
+                if data.get('run_id') and str(t['run_id'])!=str(data['run_id']): continue
+                if data.get('security') and data['security'] not in (t['code'],t['name']): continue
+                if data.get('from') and t['time'] < timestamp(data['from']): continue
+                if data.get('to') and t['time'] > timestamp(data['to']): continue
+                t['fees']=format(sum(Decimal(t[k]) for k in ('commission','stamp_tax','transfer_fee')),'.2f')
+                t['fee_basis']=json.loads(t['fee_basis']); result.append(t)
+            if action=='trade.get':
+                if not result: raise LedgerError('交易不存在')
+                return result[0]
+            return result
         raise LedgerError('未知操作')
 
+    def replay(self, db, ident):
+        a=get(db,'accounts',ident,'账户')
+        pools={p['id']:{'cash':Decimal(0),'holdings':{}} for p in db.execute('SELECT * FROM pools WHERE account_id=?',(ident,))}
+        unallocated=Decimal(a['initial_cash']) / 100
+        events=[]
+        for h in db.execute('SELECT * FROM holdings WHERE account_id=?',(ident,)):
+            events.append((timestamp(h['date']),0,h['id'],'holding',h))
+        for c in db.execute('SELECT * FROM cash_events WHERE account_id=?',(ident,)):
+            # The original schema wrote SQLite CURRENT_TIMESTAMP in UTC, with a space.
+            created = c['created_at']
+            if ' ' in created and 'T' not in created: created = created.replace(' ','T') + '+00:00'
+            events.append((timestamp(created),1,c['id'],'cash',c))
+        for t in db.execute('SELECT trades.*,runs.pool_id FROM trades JOIN runs ON runs.id=trades.run_id JOIN pools ON pools.id=runs.pool_id WHERE pools.account_id=?',(ident,)):
+            events.append((timestamp(t['time']),2,t['id'],'trade',t))
+        for when,_,__,kind,row in sorted(events,key=lambda x:x[:3]):
+            if kind=='cash':
+                delta=Decimal(row['amount'])/100 * (1 if row['direction']=='in' else -1)
+                if row['pool_id']:
+                    pools[row['pool_id']]['cash']+=delta; unallocated-=delta
+                else: unallocated+=delta
+                if unallocated < 0: raise LedgerError(f'{when} 的资金操作导致未分配现金不足，请检查后续记录')
+                if row['pool_id'] and pools[row['pool_id']]['cash'] < 0: raise LedgerError(f'{when} 的资金操作导致资产池现金不足，请检查后续记录')
+            else:
+                p=pools[row['pool_id']]; hs=p['holdings']; h=hs.setdefault(row['code'],{'code':row['code'],'name':row['name'],'quantity':0,'total':Decimal(0),'date':when[:10]})
+                if kind=='holding':
+                    h['quantity']+=row['quantity']; h['total']+=Decimal(row['cost'])*row['quantity']
+                else:
+                    fees=sum(Decimal(row[k]) for k in ('commission','stamp_tax','transfer_fee')); amount=Decimal(row['amount']); n=row['quantity']
+                    if row['direction']=='buy':
+                        p['cash']-=amount+fees; h['quantity']+=n; h['total']+=amount+fees
+                        if p['cash']<0: raise LedgerError(f'{when} 的买入导致资产池现金不足，请检查交易和后续资金记录')
+                    else:
+                        if h['quantity']<n: raise LedgerError(f'{when} 的卖出超过资产池持仓，请检查交易和后续记录')
+                        p['cash']+=amount-fees; h['quantity']-=n; h['total']-=amount-fees
+                        if p['cash']<0: raise LedgerError(f'{when} 的卖出费用导致资产池现金不足')
+                        if not h['quantity']: h['total']=Decimal(0)
+        return unallocated, pools
+
     def account(self, db, ident):
-        a = get(db,'accounts',ident,'账户')
-        pools = []
+        a=get(db,'accounts',ident,'账户')
+        unallocated,state=self.replay(db,a['id'])
+        pools=[]; grouped={}
         for p in db.execute('SELECT * FROM pools WHERE account_id=? ORDER BY id',(a['id'],)).fetchall():
-            runs = [dict(r) for r in db.execute('SELECT * FROM runs WHERE pool_id=? ORDER BY id',(p['id'],))]
-            holdings = [dict(r) for r in db.execute('SELECT code,name,quantity,cost,date FROM holdings WHERE pool_id=? ORDER BY id',(p['id'],))]
-            pools.append({'id':p['id'],'name':p['name'],'cash':fmt(p['cash']),'runs':runs,'holdings':holdings})
-        grouped = {}
-        for h in db.execute('SELECT code,name,quantity,cost FROM holdings WHERE account_id=? ORDER BY code',(a['id'],)):
-            entry = grouped.setdefault(h['code'], {'code':h['code'], 'name':h['name'], 'quantity':0, 'total':Decimal(0)})
-            entry['quantity'] += h['quantity']
-            entry['total'] += Decimal(h['cost']) * h['quantity']
-        holdings = []
+            runs=[dict(r) for r in db.execute('SELECT * FROM runs WHERE pool_id=? ORDER BY id',(p['id'],))]
+            holdings=[]
+            for h in state[p['id']]['holdings'].values():
+                if not h['quantity']: continue
+                holdings.append({'code':h['code'],'name':h['name'],'quantity':h['quantity'],'cost':format(h['total']/h['quantity'],'.4f'),'date':h['date']})
+                g=grouped.setdefault(h['code'],{'code':h['code'],'name':h['name'],'quantity':0,'total':Decimal(0)})
+                g['quantity']+=h['quantity']; g['total']+=h['total']
+            pools.append({'id':p['id'],'name':p['name'],'cash':fmt(cents(state[p['id']]['cash'])),'runs':runs,'holdings':holdings})
+        holdings=[]
         for h in grouped.values():
-            h['cost'] = format(h.pop('total') / h['quantity'], '.4f')
-            holdings.append(h)
-        return {'id':a['id'],'name':a['name'],'commission_rate':a['commission_rate'],'setup_complete':bool(a['setup_complete']),'initial_cash':fmt(a['initial_cash']),'cash':fmt(a['unallocated']+sum(int(Decimal(p['cash'])*100) for p in pools)),'unallocated_cash':fmt(a['unallocated']),'pools':pools,'holdings':holdings}
+            h['cost']=format(h.pop('total')/h['quantity'],'.4f'); holdings.append(h)
+        holdings.sort(key=lambda h:h['code'])
+        return {'id':a['id'],'name':a['name'],'commission_rate':a['commission_rate'],'setup_complete':bool(a['setup_complete']),'initial_cash':fmt(a['initial_cash']),'cash':fmt(cents(unallocated+sum((p['cash'] for p in state.values()),Decimal(0)))),'unallocated_cash':fmt(cents(unallocated)),'pools':pools,'holdings':holdings}
