@@ -65,7 +65,7 @@ class EntryPointsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             db=str(Path(d)/'ledger.db'); l=Ledger(db)
             l.execute('catalog.import',{'source':'test','securities':[{'code':'510300','name':'基金','type':'etf'}]})
-            a=l.execute('account.create',{'name':'账户','cash':'1000','commission_rate':'0'})['id']
+            a=l.execute('account.create',{'name':'账户','cash':'1000','commission_rate':'0','opened_at':'2025-01-01T00:00'})['id']
             s=l.execute('strategy.create',{'name':'策略'})['id']
             p=l.execute('pool.create',{'name':'池','account_id':a})['id']
             r=l.execute('run.create',{'name':'运行','strategy_id':s,'pool_id':p})['id']

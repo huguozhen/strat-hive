@@ -17,7 +17,7 @@ python -m strathive serve
 3. 在资产分配页面逐条加入**全部**存量持仓，每只证券的数量须完整分配给本账户一个或多个已有运行的池，然后一次保存。保存是原子操作，不生成历史买入。全部保存后不能再次添加初始持仓。
 4. 资金进出及池内外划转会结束初始建账；如有存量持仓请先保存。外部转出和池划入受未分配现金限制，池划出受池现金限制。
 
-账户与池显示的是账本现金，未计算冻结资金或券商可用资金；不显示需要行情的市值和收益。资金操作可填写发生时间（不填为当前时间），不带时区的输入按运行账本的本机时间解释；带时区的输入换算为本机时间。补录成交前请确保对应资金已按时间划入。建账目前没有单独记录建账时点，用户须自行确保成交发生于建账之后。修改和删除成交会按时间重放初始持仓、所有资金操作及成交，若任一后续状态为负则整体撤销。相同时间先处理初始持仓，再处理资金操作，最后处理成交；同类记录按记录 ID 排序。
+账户与池显示的是账本现金，未计算冻结资金或券商可用资金；不显示需要行情的市值和收益。资金操作可填写发生时间（不填为当前时间），不带时区的输入按运行账本的本机时间解释；带时区的输入换算为本机时间。补录成交前请确保对应资金已按时间划入。新账户记录建账时点（默认当前时间，也可填写真实时点），禁止录入更早的成交。升级前的旧账户时点未知，先在修改账户信息中填写实际建账时点，才能录入成交；不要猜测该时点。存量持仓日期可以早于建账。修改和删除成交会按时间重放初始持仓、所有资金操作及成交，若任一后续状态为负则整体撤销。相同时间先处理初始持仓，再处理资金操作，最后处理成交；同类记录按记录 ID 排序。
 
 ## 证券资料
 
@@ -39,10 +39,10 @@ python -m strathive serve
 命令格式 `python -m strathive [--db 数据库路径] 操作 --json JSON对象`；成功时标准输出为 JSON，错误输出到标准错误并以非零状态退出。`--json @文件名` 读取 UTF-8 JSON，`--json @-` 从标准输入读取；方便脚本和后续工具调用。
 
 ```sh
-python -m strathive account.create --json '{"name":"券商账户","cash":"10000.00","commission_rate":"0.0003"}'
+python -m strathive account.create --json '{"name":"券商账户","cash":"10000.00","commission_rate":"0.0003","opened_at":"2026-01-01T09:00:00"}'
 python -m strathive account.list
 python -m strathive account.get --json '{"id":1}'
-python -m strathive account.update --json '{"id":1,"name":"新名称","commission_rate":"0.0003"}'
+python -m strathive account.update --json '{"id":1,"name":"新名称","commission_rate":"0.0003","opened_at":"2026-01-01T09:00:00"}'
 python -m strathive catalog.sync
 python -m strathive catalog.import --json @securities.json
 python -m strathive catalog.search --json '{"query":"600000"}'

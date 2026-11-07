@@ -72,6 +72,8 @@ class Ledger:
             CREATE TABLE IF NOT EXISTS cash_events(id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL REFERENCES accounts(id), pool_id INTEGER REFERENCES pools(id), direction TEXT NOT NULL, amount INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
             CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL REFERENCES runs(id), code TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL, direction TEXT NOT NULL, time TEXT NOT NULL, price TEXT NOT NULL, quantity INTEGER NOT NULL, amount TEXT NOT NULL, commission TEXT NOT NULL, stamp_tax TEXT NOT NULL, transfer_fee TEXT NOT NULL, reason TEXT NOT NULL, note TEXT NOT NULL, fee_basis TEXT NOT NULL);
             ''')
+            columns={row['name'] for row in db.execute('PRAGMA table_info(accounts)')}
+            if 'opened_at' not in columns: db.execute('ALTER TABLE accounts ADD COLUMN opened_at TEXT')
 
     def connect(self):
         db = sqlite3.connect(self.path, timeout=30)
@@ -94,14 +96,17 @@ class Ledger:
             rate = str(decimal(data.get('commission_rate'), '佣金费率', True))
             if Decimal(rate) > 1: raise LedgerError('佣金费率不能大于 1')
             initial_cash = money(data.get('cash',0),True)
-            cur = db.execute('INSERT INTO accounts(name, commission_rate, unallocated, initial_cash) VALUES(?,?,?,?)', (required(data,'name'),rate,initial_cash,initial_cash))
+            opened_at=timestamp(data.get('opened_at') or datetime.datetime.now().isoformat())
+            cur = db.execute('INSERT INTO accounts(name, commission_rate, unallocated, initial_cash, opened_at) VALUES(?,?,?,?,?)', (required(data,'name'),rate,initial_cash,initial_cash,opened_at))
             return {'id':cur.lastrowid}
         if action == 'account.update':
             account = get(db,'accounts',data.get('id'),'账户')
             rate = str(decimal(data.get('commission_rate', account['commission_rate']), '佣金费率', True))
             if Decimal(rate) > 1: raise LedgerError('佣金费率不能大于 1')
             name = required({'name':data.get('name',account['name'])}, 'name')
-            db.execute('UPDATE accounts SET name=?,commission_rate=? WHERE id=?',(name,rate,account['id']))
+            opened_at=timestamp(data['opened_at']) if data.get('opened_at') else account['opened_at']
+            if opened_at and db.execute('SELECT 1 FROM trades JOIN runs ON runs.id=trades.run_id JOIN pools ON pools.id=runs.pool_id WHERE pools.account_id=? AND trades.time<? LIMIT 1',(account['id'],opened_at)).fetchone(): raise LedgerError('建账时点晚于已有成交，请检查输入')
+            db.execute('UPDATE accounts SET name=?,commission_rate=?,opened_at=? WHERE id=?',(name,rate,opened_at,account['id']))
             return {'id':account['id']}
         if action == 'account.list':
             return [self.account(db, r['id']) for r in db.execute('SELECT id FROM accounts ORDER BY id').fetchall()]
@@ -222,6 +227,8 @@ class Ledger:
             direction = row.get('direction')
             if direction not in ('buy','sell'): raise LedgerError('交易方向须为 buy 或 sell')
             when = timestamp(row.get('time'))
+            if not account['opened_at']: raise LedgerError('该旧账户的建账时点未知，请先在账户信息中确认建账时点')
+            if when < account['opened_at']: raise LedgerError('成交时间早于账户建账时点，不能录入建账前交易')
             price = decimal(row.get('price'),'成交价格',places=4)
             n = quantity(row.get('quantity')); amount = price * n
             # These are clearly labelled estimates; the receipt values can override each fee.
@@ -328,4 +335,4 @@ class Ledger:
         for h in grouped.values():
             h['cost']=format(h.pop('total')/h['quantity'],'.4f'); holdings.append(h)
         holdings.sort(key=lambda h:h['code'])
-        return {'id':a['id'],'name':a['name'],'commission_rate':a['commission_rate'],'setup_complete':bool(a['setup_complete']),'initial_cash':fmt(a['initial_cash']),'cash':fmt(cents(unallocated+sum((p['cash'] for p in state.values()),Decimal(0)))),'unallocated_cash':fmt(cents(unallocated)),'pools':pools,'holdings':holdings}
+        return {'id':a['id'],'name':a['name'],'commission_rate':a['commission_rate'],'opened_at':a['opened_at'],'setup_complete':bool(a['setup_complete']),'initial_cash':fmt(a['initial_cash']),'cash':fmt(cents(unallocated+sum((p['cash'] for p in state.values()),Decimal(0)))),'unallocated_cash':fmt(cents(unallocated)),'pools':pools,'holdings':holdings}

@@ -10,7 +10,7 @@ class TradeTest(unittest.TestCase):
         self.path = Path(self.tmp.name) / 'ledger.db'
         self.l = Ledger(self.path)
         self.l.execute('catalog.import', {'source':'test','securities':[{'code':'600000','name':'浦发银行','type':'stock'},{'code':'510300','name':'沪深300ETF','type':'etf'}]})
-        self.a = self.l.execute('account.create', {'name':'账户','cash':'20000','commission_rate':'0.0003'})['id']
+        self.a = self.l.execute('account.create', {'name':'账户','cash':'20000','commission_rate':'0.0003','opened_at':'2025-01-01T00:00'})['id']
         s = self.l.execute('strategy.create', {'name':'策略'})['id']
         self.p = self.l.execute('pool.create', {'account_id':self.a,'name':'池'})['id']
         self.r = self.l.execute('run.create', {'strategy_id':s,'pool_id':self.p,'name':'运行'})['id']
@@ -94,3 +94,32 @@ class TradeTest(unittest.TestCase):
         self.assertEqual(len(self.l.execute('trade.list',{'security':'510300','from':'2026-01-03T00:00','to':'2026-01-03T23:59'})),1)
         with self.assertRaisesRegex(LedgerError,'持仓'):
             self.l.execute('trade.create',{'run_id':self.r,'security':'510300','direction':'sell','time':'2026-01-04T10:00','price':'10','quantity':501})
+
+    def test_trade_before_account_opening_is_rejected(self):
+        account=self.l.execute('account.create',{'name':'时间边界','cash':'100','commission_rate':'0','opened_at':'2026-02-01T09:00'})['id']
+        strategy=self.l.execute('strategy.create',{'name':'时间策略'})['id']
+        pool=self.l.execute('pool.create',{'account_id':account,'name':'时间池'})['id']
+        run=self.l.execute('run.create',{'strategy_id':strategy,'pool_id':pool,'name':'时间运行'})['id']
+        self.l.execute('cash.move',{'account_id':account,'pool_id':pool,'direction':'in','amount':'100','time':'2026-02-01T09:00'})
+        with self.assertRaisesRegex(LedgerError,'建账'):
+            self.l.execute('trade.create',{'run_id':run,'security':'510300','direction':'buy','time':'2026-01-31T10:00','price':'1','quantity':1,'commission':'0'})
+        self.assertEqual(self.l.execute('trade.list',{'run_id':run}),[])
+        valid=self.l.execute('trade.create',{'run_id':run,'security':'510300','direction':'buy','time':'2026-02-01T09:01','price':'1','quantity':1,'commission':'0'})['id']
+        with self.assertRaisesRegex(LedgerError,'建账'):
+            self.l.execute('trade.update',{'id':valid,'time':'2026-01-31T10:00'})
+        self.assertEqual(self.l.execute('trade.get',{'id':valid})['time'],'2026-02-01T09:01:00.000000')
+
+    def test_legacy_account_requires_confirmation_of_unknown_opening_time(self):
+        import sqlite3
+        with sqlite3.connect(self.path) as db:
+            db.execute('ALTER TABLE accounts DROP COLUMN opened_at')
+        migrated=Ledger(self.path)
+        self.assertIsNone(migrated.execute('account.get',{'id':self.a})['opened_at'])
+        trade={'run_id':self.r,'security':'510300','direction':'buy','time':'2026-01-02T10:00','price':'1','quantity':1,'commission':'0'}
+        with self.assertRaisesRegex(LedgerError,'时点未知'):
+            migrated.execute('trade.create',trade)
+        migrated.execute('account.update',{'id':self.a,'opened_at':'2025-01-01T00:00'})
+        ident=migrated.execute('trade.create',trade)['id']
+        with self.assertRaisesRegex(LedgerError,'晚于已有成交'):
+            migrated.execute('account.update',{'id':self.a,'opened_at':'2026-01-03T00:00'})
+        self.assertEqual(migrated.execute('trade.get',{'id':ident})['quantity'],1)
