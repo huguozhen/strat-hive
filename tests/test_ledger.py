@@ -36,6 +36,7 @@ class LedgerTest(unittest.TestCase):
             fund=ledger.execute('catalog.search', {'query':'510300'})['securities'][0]
             self.assertEqual(stock['code'], '600000')
             self.assertEqual(fund['full_name'], '')  # 扩位简称不是基金法律全称
+            self.assertEqual(ledger.execute('catalog.search', {'query':'沪深300ETF华泰柏瑞'})['securities'][0]['code'], '510300')
 
     def test_future_account_opening_is_rejected(self):
         with tempfile.TemporaryDirectory() as d:

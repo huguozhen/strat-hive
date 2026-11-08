@@ -90,6 +90,7 @@ class Ledger:
             if 'opened_at' not in columns: db.execute('ALTER TABLE accounts ADD COLUMN opened_at TEXT')
             columns={row['name'] for row in db.execute('PRAGMA table_info(securities)')}
             if 'full_name' not in columns: db.execute("ALTER TABLE securities ADD COLUMN full_name TEXT NOT NULL DEFAULT ''")
+            if 'extended_name' not in columns: db.execute("ALTER TABLE securities ADD COLUMN extended_name TEXT NOT NULL DEFAULT ''")
             columns={row['name'] for row in db.execute('PRAGMA table_info(runs)')}
             if 'bound_at' not in columns:
                 db.execute('ALTER TABLE runs ADD COLUMN bound_at TEXT')
@@ -188,15 +189,16 @@ class Ledger:
                 code, name, kind = required(item,'code'), required(item,'name'), required(item,'type')
                 if not re.fullmatch(r'\d{6}',code) or kind not in ('stock','etf') or code in seen: raise LedgerError('目录包含无效或重复证券代码、类型，原有目录未更改')
                 full_name = item.get('full_name', '')
-                if not isinstance(full_name,str): raise LedgerError('证券全称须为字符串')
-                seen.add(code); values.append((code,name,kind,full_name.strip()))
+                extended_name = item.get('extended_name', '')
+                if not isinstance(full_name,str) or not isinstance(extended_name,str): raise LedgerError('证券全称和扩位简称须为字符串')
+                seen.add(code); values.append((code,name,kind,full_name.strip(),extended_name.strip()))
             source = required(data,'source')
-            db.execute('DELETE FROM securities'); db.executemany('INSERT INTO securities(code,name,type,full_name) VALUES(?,?,?,?)',values)
+            db.execute('DELETE FROM securities'); db.executemany('INSERT INTO securities(code,name,type,full_name,extended_name) VALUES(?,?,?,?,?)',values)
             db.execute('DELETE FROM catalog_meta'); db.execute('INSERT INTO catalog_meta VALUES(?,?,?)',(source,datetime.datetime.now(datetime.timezone.utc).isoformat(),len(values)))
             return {'source':source,'count':len(values)}
         if action == 'catalog.search':
             q = str(data.get('query','')).strip()
-            rows = db.execute('SELECT * FROM securities WHERE code LIKE ? OR name LIKE ? OR full_name LIKE ? ORDER BY code LIMIT 100',(f'%{q}%',f'%{q}%',f'%{q}%')).fetchall()
+            rows = db.execute('SELECT * FROM securities WHERE code LIKE ? OR name LIKE ? OR full_name LIKE ? OR extended_name LIKE ? ORDER BY code LIMIT 100',(f'%{q}%',)*4).fetchall()
             meta = db.execute('SELECT * FROM catalog_meta').fetchone()
             return {'metadata':dict(meta) if meta else None,'securities':[dict(r) for r in rows]}
         if action == 'initial.close':
@@ -212,7 +214,7 @@ class Ledger:
             if not isinstance(items,list) or not items: raise LedgerError('请填写初始持仓')
             for item in items:
                 if not isinstance(item,dict): raise LedgerError('初始持仓条目须为对象')
-                sec = db.execute('SELECT * FROM securities WHERE code=? OR name=? OR (full_name != \'\' AND full_name=?)',(item.get('security'),)*3).fetchall()
+                sec = db.execute('SELECT * FROM securities WHERE code=? OR name=? OR (full_name != \'\' AND full_name=?) OR (extended_name != \'\' AND extended_name=?)',(item.get('security'),)*4).fetchall()
                 if len(sec)!=1: raise LedgerError('本地目录未收录或名称不唯一，请检查代码或更新证券资料')
                 n = quantity(item.get('quantity')); cost = str(cost_price(item.get('cost')))
                 date = required(item,'date')
@@ -260,7 +262,7 @@ class Ledger:
                 old_run = get(db,'runs',old['run_id'],'策略运行')
                 old_account_id = get(db,'pools',old_run['pool_id'],'资产池')['account_id']
             sec_value = data.get('security',row.get('code'))
-            sec = db.execute('SELECT * FROM securities WHERE code=? OR name=? OR (full_name != \'\' AND full_name=?)',(sec_value,)*3).fetchall()
+            sec = db.execute('SELECT * FROM securities WHERE code=? OR name=? OR (full_name != \'\' AND full_name=?) OR (extended_name != \'\' AND extended_name=?)',(sec_value,)*4).fetchall()
             if len(sec) != 1:
                 if old and sec_value in (old['code'],old['name']): sec = [old]
                 else: raise LedgerError('本地目录未收录或名称不唯一，请检查代码或更新证券资料')
