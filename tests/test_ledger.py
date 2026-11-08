@@ -1,9 +1,29 @@
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from strathive.ledger import Ledger, LedgerError
 
 class LedgerTest(unittest.TestCase):
+    def test_public_catalog_keeps_provided_legal_names(self):
+        from strathive.catalog import sync
+        with tempfile.TemporaryDirectory() as d:
+            ledger = Ledger(Path(d) / 'ledger.db')
+            def stock_or_fund(path, params):
+                if params.get('STOCK_TYPE'):
+                    return [{'A_STOCK_CODE':'600000','SEC_NAME_CN':'浦发银行','FULL_NAME':'上海浦东发展银行股份有限公司'}]
+                return [{'fundCode':'510300','fundAbbr':'沪深300ETF','secNameFull':'沪深300ETF华泰柏瑞'}]
+            def shenzhen(url):
+                if '1110' in url:
+                    return [{'板块':'主板','A股代码':'000001','A股简称':'平安银行','公司全称':'平安银行股份有限公司'}]
+                return [{'基金类别':'ETF','基金代码':'159001','基金简称':'ETF测试'}]
+            with patch('strathive.catalog.sse', side_effect=stock_or_fund), patch('strathive.catalog.xlsx', side_effect=shenzhen):
+                sync(ledger)
+            stock=ledger.execute('catalog.search', {'query':'上海浦东发展银行股份有限公司'})['securities'][0]
+            fund=ledger.execute('catalog.search', {'query':'510300'})['securities'][0]
+            self.assertEqual(stock['code'], '600000')
+            self.assertEqual(fund['full_name'], '')  # 扩位简称不是基金法律全称
+
     def test_future_account_opening_is_rejected(self):
         with tempfile.TemporaryDirectory() as d:
             ledger = Ledger(Path(d) / 'ledger.db')
