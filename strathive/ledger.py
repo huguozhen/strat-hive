@@ -88,6 +88,13 @@ class Ledger:
             ''')
             columns={row['name'] for row in db.execute('PRAGMA table_info(accounts)')}
             if 'opened_at' not in columns: db.execute('ALTER TABLE accounts ADD COLUMN opened_at TEXT')
+            columns={row['name'] for row in db.execute('PRAGMA table_info(securities)')}
+            if 'full_name' not in columns: db.execute("ALTER TABLE securities ADD COLUMN full_name TEXT NOT NULL DEFAULT ''")
+            columns={row['name'] for row in db.execute('PRAGMA table_info(runs)')}
+            if 'bound_at' not in columns:
+                db.execute('ALTER TABLE runs ADD COLUMN bound_at TEXT')
+                db.execute('''UPDATE runs SET bound_at=(SELECT accounts.opened_at FROM pools JOIN accounts ON accounts.id=pools.account_id WHERE pools.id=runs.pool_id)
+                              WHERE NOT EXISTS (SELECT 1 FROM runs earlier WHERE earlier.pool_id=runs.pool_id AND earlier.id<runs.id)''')
 
     def connect(self):
         db = sqlite3.connect(self.path, timeout=30)
@@ -111,6 +118,7 @@ class Ledger:
             if Decimal(rate) > 1: raise LedgerError('佣金费率不能大于 1')
             initial_cash = money(data.get('cash',0),True)
             opened_at=timestamp(data.get('opened_at') or datetime.datetime.now().isoformat())
+            if opened_at > timestamp(datetime.datetime.now().isoformat()): raise LedgerError('建账时点不能在未来')
             cur = db.execute('INSERT INTO accounts(name, commission_rate, unallocated, initial_cash, opened_at) VALUES(?,?,?,?,?)', (required(data,'name'),rate,initial_cash,initial_cash,opened_at))
             return {'id':cur.lastrowid}
         if action == 'account.update':
@@ -119,10 +127,14 @@ class Ledger:
             if Decimal(rate) > 1: raise LedgerError('佣金费率不能大于 1')
             name = required({'name':data.get('name',account['name'])}, 'name')
             opened_at=timestamp(data['opened_at']) if data.get('opened_at') else account['opened_at']
+            if opened_at and opened_at > timestamp(datetime.datetime.now().isoformat()): raise LedgerError('建账时点不能在未来')
             if data.get('opened_at') and any(datetime.date.fromisoformat(h['date']).isoformat() > opened_at[:10] for h in db.execute('SELECT date FROM holdings WHERE account_id=?',(account['id'],))): raise LedgerError('持仓日期不能晚于账户建账日期')
             if opened_at and db.execute('SELECT 1 FROM trades JOIN runs ON runs.id=trades.run_id JOIN pools ON pools.id=runs.pool_id WHERE pools.account_id=? AND trades.time<? LIMIT 1',(account['id'],opened_at)).fetchone(): raise LedgerError('建账时点晚于已有成交，请检查输入')
             if opened_at and any(cash_timestamp(r['created_at']) < opened_at for r in db.execute('SELECT created_at FROM cash_events WHERE account_id=?',(account['id'],))): raise LedgerError('建账时点晚于已有资金操作，请检查输入')
             db.execute('UPDATE accounts SET name=?,commission_rate=?,opened_at=? WHERE id=?',(name,rate,opened_at,account['id']))
+            if opened_at:
+                db.execute('''UPDATE runs SET bound_at=? WHERE pool_id IN (SELECT id FROM pools WHERE account_id=?)
+                              AND NOT EXISTS (SELECT 1 FROM runs earlier WHERE earlier.pool_id=runs.pool_id AND earlier.id<runs.id)''',(opened_at,account['id']))
             return {'id':account['id']}
         if action == 'account.list':
             return [self.account(db, r['id']) for r in db.execute('SELECT id FROM accounts ORDER BY id').fetchall()]
@@ -141,8 +153,10 @@ class Ledger:
             cur = db.execute('INSERT INTO pools(account_id,name) VALUES(?,?)',(data['account_id'],required(data,'name')))
             return {'id':cur.lastrowid}
         if action == 'run.create':
-            get(db,'strategies',data.get('strategy_id'),'策略'); get(db,'pools',data.get('pool_id'),'资产池')
-            cur = db.execute("INSERT INTO runs(strategy_id,pool_id,name,status) VALUES(?,?,?,'paused')",(data['strategy_id'],data['pool_id'],required(data,'name')))
+            get(db,'strategies',data.get('strategy_id'),'策略'); pool=get(db,'pools',data.get('pool_id'),'资产池')
+            previous=db.execute('SELECT 1 FROM runs WHERE pool_id=? LIMIT 1',(pool['id'],)).fetchone()
+            bound_at=timestamp(datetime.datetime.now().isoformat()) if previous else get(db,'accounts',pool['account_id'],'账户')['opened_at']
+            cur = db.execute("INSERT INTO runs(strategy_id,pool_id,name,status,bound_at) VALUES(?,?,?,'paused',?)",(data['strategy_id'],data['pool_id'],required(data,'name'),bound_at))
             return {'id':cur.lastrowid}
         if action == 'run.status':
             run = get(db,'runs',data.get('id'),'策略运行')
@@ -173,14 +187,16 @@ class Ledger:
             for item in entries:
                 code, name, kind = required(item,'code'), required(item,'name'), required(item,'type')
                 if not re.fullmatch(r'\d{6}',code) or kind not in ('stock','etf') or code in seen: raise LedgerError('目录包含无效或重复证券代码、类型，原有目录未更改')
-                seen.add(code); values.append((code,name,kind))
+                full_name = item.get('full_name', '')
+                if not isinstance(full_name,str): raise LedgerError('证券全称须为字符串')
+                seen.add(code); values.append((code,name,kind,full_name.strip()))
             source = required(data,'source')
-            db.execute('DELETE FROM securities'); db.executemany('INSERT INTO securities VALUES(?,?,?)',values)
+            db.execute('DELETE FROM securities'); db.executemany('INSERT INTO securities(code,name,type,full_name) VALUES(?,?,?,?)',values)
             db.execute('DELETE FROM catalog_meta'); db.execute('INSERT INTO catalog_meta VALUES(?,?,?)',(source,datetime.datetime.now(datetime.timezone.utc).isoformat(),len(values)))
             return {'source':source,'count':len(values)}
         if action == 'catalog.search':
             q = str(data.get('query','')).strip()
-            rows = db.execute('SELECT * FROM securities WHERE code LIKE ? OR name LIKE ? ORDER BY code LIMIT 100',(f'%{q}%',f'%{q}%')).fetchall()
+            rows = db.execute('SELECT * FROM securities WHERE code LIKE ? OR name LIKE ? OR full_name LIKE ? ORDER BY code LIMIT 100',(f'%{q}%',f'%{q}%',f'%{q}%')).fetchall()
             meta = db.execute('SELECT * FROM catalog_meta').fetchone()
             return {'metadata':dict(meta) if meta else None,'securities':[dict(r) for r in rows]}
         if action == 'initial.close':
@@ -195,7 +211,8 @@ class Ledger:
             items = data.get('holdings')
             if not isinstance(items,list) or not items: raise LedgerError('请填写初始持仓')
             for item in items:
-                sec = db.execute('SELECT * FROM securities WHERE code=? OR name=?',(item.get('security'),item.get('security'))).fetchall()
+                if not isinstance(item,dict): raise LedgerError('初始持仓条目须为对象')
+                sec = db.execute('SELECT * FROM securities WHERE code=? OR name=? OR (full_name != \'\' AND full_name=?)',(item.get('security'),)*3).fetchall()
                 if len(sec)!=1: raise LedgerError('本地目录未收录或名称不唯一，请检查代码或更新证券资料')
                 n = quantity(item.get('quantity')); cost = str(cost_price(item.get('cost')))
                 date = required(item,'date')
@@ -204,6 +221,7 @@ class Ledger:
                 if date > account['opened_at'][:10]: raise LedgerError('持仓日期不能晚于账户建账日期')
                 allocations = item.get('allocations')
                 if not isinstance(allocations,list) or not allocations: raise LedgerError('每只证券须完整分配至资产池')
+                if any(not isinstance(x,dict) for x in allocations): raise LedgerError('资产分配条目须为对象')
                 if sum(quantity(x.get('quantity')) for x in allocations) != n: raise LedgerError('分配数量之和必须等于持仓数量')
                 seen = set()
                 for alloc in allocations:
@@ -223,6 +241,7 @@ class Ledger:
             if pool and pool['account_id'] != a['id']: raise LedgerError('资产池不属于该账户')
             if direction not in ('in','out'): raise LedgerError('方向须为 in 或 out')
             when = timestamp(data.get('time') or datetime.datetime.now().isoformat())
+            if when > timestamp(datetime.datetime.now().isoformat()): raise LedgerError('不能记录未来的资金操作')
             if not a['opened_at']: raise LedgerError('该旧账户的建账时点未知，请先在账户信息中确认建账时点')
             if when < a['opened_at']: raise LedgerError('资金操作时间早于账户建账时点')
             db.execute('UPDATE accounts SET setup_complete=1 WHERE id=?',(a['id'],))
@@ -241,15 +260,19 @@ class Ledger:
                 old_run = get(db,'runs',old['run_id'],'策略运行')
                 old_account_id = get(db,'pools',old_run['pool_id'],'资产池')['account_id']
             sec_value = data.get('security',row.get('code'))
-            sec = db.execute('SELECT * FROM securities WHERE code=? OR name=?',(sec_value,sec_value)).fetchall()
+            sec = db.execute('SELECT * FROM securities WHERE code=? OR name=? OR (full_name != \'\' AND full_name=?)',(sec_value,)*3).fetchall()
             if len(sec) != 1:
                 if old and sec_value in (old['code'],old['name']): sec = [old]
                 else: raise LedgerError('本地目录未收录或名称不唯一，请检查代码或更新证券资料')
             direction = row.get('direction')
             if direction not in ('buy','sell'): raise LedgerError('交易方向须为 buy 或 sell')
             when = timestamp(row.get('time'))
+            if when > timestamp(datetime.datetime.now().isoformat()): raise LedgerError('不能记录未来的成交')
             if not account['opened_at']: raise LedgerError('该旧账户的建账时点未知，请先在账户信息中确认建账时点')
             if when < account['opened_at']: raise LedgerError('成交时间早于账户建账时点，不能录入建账前交易')
+            next_run=db.execute('SELECT bound_at FROM runs WHERE pool_id=? AND id>? ORDER BY id LIMIT 1',(pool['id'],run['id'])).fetchone()
+            if not run['bound_at'] or (next_run and not next_run['bound_at']): raise LedgerError('历史资产池绑定时点未知，不能确定成交归属')
+            if when < run['bound_at'] or (next_run and when >= next_run['bound_at']): raise LedgerError('成交时间不在该运行的资产池绑定期间')
             price = decimal(row.get('price'),'成交价格',places=4)
             n = quantity(row.get('quantity')); amount = price * n
             # These are clearly labelled estimates; the receipt values can override each fee.
@@ -390,21 +413,22 @@ class Ledger:
                 p=pools[row['pool_id']]; hs=p['holdings']; h=hs.setdefault(row['code'],{'code':row['code'],'name':row['name'],'quantity':0,'total':Decimal(0),'date':row['date'] if kind=='holding' else when[:10]})
                 ah=account_holdings.setdefault(row['code'],{'code':row['code'],'name':row['name'],'quantity':0,'total':Decimal(0)})
                 if kind=='holding':
-                    h['quantity']+=row['quantity']; h['total']+=Decimal(row['cost'])*row['quantity']
-                    ah['quantity']+=row['quantity']; ah['total']+=Decimal(row['cost'])*row['quantity']
+                    for position in (h,ah):
+                        position['quantity']+=row['quantity']; position['total']+=Decimal(row['cost'])*row['quantity']
                 else:
                     fees=sum(Decimal(row[k]) for k in ('commission','stamp_tax','transfer_fee')); amount=Decimal(row['amount']); n=row['quantity']
                     if row['direction']=='buy':
-                        p['cash']-=amount+fees; h['quantity']+=n; h['total']+=amount+fees
-                        ah['quantity']+=n; ah['total']+=amount+fees
+                        p['cash']-=amount+fees
+                        for position in (h,ah):
+                            position['quantity']+=n; position['total']+=amount+fees
                         if p['cash']<0: raise LedgerError(f'{when} 的买入导致资产池现金不足，请检查交易和后续资金记录')
                     else:
                         if h['quantity']<n: raise LedgerError(f'{when} 的卖出超过资产池持仓，请检查交易和后续记录')
-                        p['cash']+=amount-fees; h['quantity']-=n; h['total']-=amount-fees
-                        ah['quantity']-=n; ah['total']-=amount-fees
-                        if not ah['quantity']: ah['total']=Decimal(0)
+                        p['cash']+=amount-fees
+                        for position in (h,ah):
+                            position['quantity']-=n; position['total']-=amount-fees
+                            if not position['quantity']: position['total']=Decimal(0)
                         if p['cash']<0: raise LedgerError(f'{when} 的卖出费用导致资产池现金不足')
-                        if not h['quantity']: h['total']=Decimal(0)
         return unallocated, pools, account_holdings
 
     def account(self, db, ident):
