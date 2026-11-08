@@ -11,11 +11,13 @@ def main():
     parser.add_argument('action', help='操作名，或 serve 启动 Web')
     parser.add_argument('--json', default='{}', help='操作参数 JSON；使用 @文件名 读取文件，@- 从标准输入读取')
     parser.add_argument('--port', type=int, default=8765)
+    parser.add_argument('--host', default='0.0.0.0', help='Web 监听地址（默认 0.0.0.0）')
+    parser.add_argument('--allow-host', action='append', default=[], help='额外允许访问的域名，可重复指定')
     args = parser.parse_args()
     if args.action == 'serve':
         from .web import make_server
-        server = make_server('127.0.0.1',args.port,args.db)
-        print(f'策略蜂巢 http://127.0.0.1:{server.server_port}', flush=True)
+        server = make_server(args.host,args.port,args.db,allowed_hosts=args.allow_host)
+        print(f'策略蜂巢监听 {args.host}:{server.server_port}', flush=True)
         try: server.serve_forever()
         except KeyboardInterrupt: pass
         finally: server.server_close()

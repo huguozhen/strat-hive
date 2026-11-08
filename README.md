@@ -8,7 +8,9 @@
 python -m strathive serve
 ```
 
-浏览器访问 <http://127.0.0.1:8765>。服务仅监听本机。默认数据库为 `~/.strathive/ledger.db`；Web 和 CLI 使用同一文件。可通过 `STRATHIVE_DB` 或 `--db /path/ledger.db` 指定路径，例如 `python -m strathive --db ./ledger.db serve --port 8766`。备份时先停止服务，再复制数据库文件。
+服务默认监听 `0.0.0.0:8765`，本机可访问 <http://127.0.0.1:8765>，其他设备可访问 `http://<开发机IP>:8765`。使用自定义域名时，通过 `--allow-host 域名` 加入允许列表；需要限制为本机时可指定 `--host 127.0.0.1`。服务没有登录认证，可访问该端口的人能够读取和修改账本，请仅在受信任的网络中开放该端口。
+
+默认数据库为 `~/.strathive/ledger.db`；Web 和 CLI 使用同一文件。可通过 `STRATHIVE_DB` 或 `--db /path/ledger.db` 指定路径，例如 `python -m strathive --db ./ledger.db serve --port 8766`。备份时先停止服务，再复制数据库文件。
 
 ### 建账顺序
 

@@ -10,6 +10,39 @@ from pathlib import Path
 from strathive.web import make_server
 
 class EntryPointsTest(unittest.TestCase):
+    def test_remote_ip_can_use_web_but_cross_origin_is_rejected(self):
+        import urllib.error
+        with tempfile.TemporaryDirectory() as d:
+            server=make_server('0.0.0.0',0,str(Path(d)/'ledger.db'))
+            thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+            port=server.server_port
+            base=f'http://127.0.0.1:{port}'
+            host=f'192.168.31.100:{port}'
+            try:
+                request=urllib.request.Request(base+'/',headers={'Host':host})
+                with urllib.request.urlopen(request) as response:
+                    self.assertIn('策略蜂巢',response.read().decode())
+                data=json.dumps({'name':'远程账户','cash':'50','commission_rate':'0'}).encode()
+                request=urllib.request.Request(base+'/api/account.create',data=data,headers={'Host':host,'Origin':f'http://{host}','Content-Type':'application/json'},method='POST')
+                with urllib.request.urlopen(request) as response: self.assertEqual(json.load(response)['id'],1)
+                request=urllib.request.Request(base+'/api/account.create',data=data,headers={'Host':host,'Origin':'http://evil.example','Content-Type':'application/json'},method='POST')
+                with self.assertRaises(urllib.error.HTTPError) as err: urllib.request.urlopen(request)
+                self.assertEqual(err.exception.code,403); err.exception.close()
+            finally:
+                server.shutdown();server.server_close();thread.join()
+
+    def test_explicit_host_is_allowed_for_matching_origin(self):
+        with tempfile.TemporaryDirectory() as d:
+            server=make_server('0.0.0.0',0,str(Path(d)/'ledger.db'),allowed_hosts=['ledger.example'])
+            thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+            port=server.server_port
+            try:
+                data=json.dumps({'name':'远程账户','cash':'0','commission_rate':'0'}).encode()
+                req=urllib.request.Request(f'http://127.0.0.1:{port}/api/account.create',data=data,headers={'Host':f'ledger.example:{port}','Origin':f'http://ledger.example:{port}'},method='POST')
+                with urllib.request.urlopen(req) as response: self.assertEqual(json.load(response)['id'],1)
+            finally:
+                server.shutdown();server.server_close();thread.join()
+
     def test_cli_and_web_share_ledger(self):
         with tempfile.TemporaryDirectory() as d:
             db = str(Path(d) / 'ledger.db')
