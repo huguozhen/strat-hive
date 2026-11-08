@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import datetime
 from pathlib import Path
 from strathive.ledger import Ledger, LedgerError
 
@@ -15,6 +16,36 @@ class TradeTest(unittest.TestCase):
         self.p = self.l.execute('pool.create', {'account_id':self.a,'name':'池'})['id']
         self.r = self.l.execute('run.create', {'strategy_id':s,'pool_id':self.p,'name':'运行'})['id']
         self.l.execute('cash.move', {'account_id':self.a,'pool_id':self.p,'direction':'in','amount':'15000','time':'2026-01-01T09:00:00'})
+
+    def test_future_trade_is_rejected_without_changing_the_ledger(self):
+        before = self.l.execute('account.get', {'id':self.a})
+        with self.assertRaisesRegex(LedgerError, '未来'):
+            self.l.execute('trade.create', {'run_id':self.r,'security':'510300','direction':'buy','time':'2099-01-01T10:00','price':'10','quantity':10})
+        self.assertEqual(self.l.execute('account.get', {'id':self.a}), before)
+        self.assertEqual(self.l.execute('trade.list'), [])
+
+    def test_security_full_name_can_be_searched_and_used_for_trades(self):
+        self.l.execute('catalog.import', {'source':'test','securities':[{'code':'510300','name':'沪深300ETF','full_name':'沪深300交易型开放式指数证券投资基金','type':'etf'}]})
+        result = self.l.execute('catalog.search', {'query':'开放式指数证券投资基金'})
+        self.assertEqual(result['securities'][0]['code'], '510300')
+        trade = self.l.execute('trade.create', {'run_id':self.r,'security':'沪深300交易型开放式指数证券投资基金','direction':'buy','time':'2026-01-02T10:00','price':'1','quantity':10,'commission':'0'})
+        self.assertEqual(self.l.execute('trade.get', {'id':trade['id']})['code'], '510300')
+
+    def test_rebound_pool_keeps_trades_in_the_correct_run_period(self):
+        self.l.execute('run.status', {'id':self.r,'status':'ended'})
+        strategy=self.l.execute('strategy.create', {'name':'新策略'})['id']
+        current=self.l.execute('run.create', {'strategy_id':strategy,'pool_id':self.p,'name':'新运行'})['id']
+        historical={'run_id':self.r,'security':'510300','direction':'buy','time':'2026-01-02T10:00','price':'1','quantity':10,'commission':'0'}
+        trade=self.l.execute('trade.create', historical)['id']
+        later={**historical, 'time':datetime.datetime.now().isoformat()}
+        before=self.l.execute('account.get', {'id':self.a})
+        with self.assertRaisesRegex(LedgerError, '绑定'):
+            self.l.execute('trade.create', later)
+        with self.assertRaisesRegex(LedgerError, '绑定'):
+            self.l.execute('trade.create', {**historical,'run_id':current})
+        with self.assertRaisesRegex(LedgerError, '绑定'):
+            self.l.execute('trade.update', {'id':trade, 'time':later['time']})
+        self.assertEqual(self.l.execute('account.get', {'id':self.a}), before)
 
     def test_buy_records_fees_and_persists_assets(self):
         result = self.l.execute('trade.create', {'run_id':self.r,'security':'浦发银行','direction':'buy','time':'2026-01-02T10:00:00','price':'10','quantity':1000,'reason':'计划','note':'记录'})

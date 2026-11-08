@@ -4,6 +4,32 @@ from pathlib import Path
 from strathive.ledger import Ledger, LedgerError
 
 class LedgerTest(unittest.TestCase):
+    def test_future_account_opening_is_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            ledger = Ledger(Path(d) / 'ledger.db')
+            with self.assertRaisesRegex(LedgerError, '未来'):
+                ledger.execute('account.create', {'name':'账户', 'commission_rate':'0', 'cash':'100', 'opened_at':'2099-01-01T00:00'})
+            self.assertEqual(ledger.execute('account.list'), [])
+
+    def test_invalid_initial_holdings_are_rejected_atomically(self):
+        with tempfile.TemporaryDirectory() as d:
+            ledger = Ledger(Path(d) / 'ledger.db')
+            account = ledger.execute('account.create', {'name':'账户', 'commission_rate':'0', 'cash':'100'})['id']
+            ledger.execute('catalog.import', {'source':'test','securities':[{'code':'600000','name':'浦发银行','type':'stock'}]})
+            before = ledger.execute('account.get', {'id':account})
+            for entries in ([None], [{'security':'600000','quantity':1,'cost':'10','date':'2025-01-01','allocations':[None]}]):
+                with self.assertRaises(LedgerError):
+                    ledger.execute('initial.record', {'account_id':account, 'holdings':entries})
+                self.assertEqual(ledger.execute('account.get', {'id':account}), before)
+
+    def test_future_cash_operation_does_not_change_current_balance(self):
+        with tempfile.TemporaryDirectory() as d:
+            ledger = Ledger(Path(d) / 'ledger.db')
+            account = ledger.execute('account.create', {'name':'账户', 'commission_rate':'0', 'cash':'100'})['id']
+            with self.assertRaisesRegex(LedgerError, '未来'):
+                ledger.execute('cash.move', {'account_id':account, 'direction':'in', 'amount':'1000', 'time':'2099-01-01T10:00:00'})
+            self.assertEqual(ledger.execute('account.get', {'id':account})['cash'], '100.00')
+
     def test_cash_account_persists(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / 'ledger.db'

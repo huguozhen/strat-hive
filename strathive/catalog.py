@@ -65,7 +65,9 @@ def sync(ledger):
         securities=[]
         for rows,code,name,kind in groups:
             if not rows: raise ValueError('证券目录某个类别为空')
-            securities.extend({'code':str(row[code]).strip(),'name':str(row[name]).strip(),'type':kind} for row in rows)
+            securities.extend({'code':str(row[code]).strip(),'name':str(row[name]).strip(),'type':kind,
+                               'full_name':str(row.get('FULL_NAME') or row.get('公司全称') or row.get('基金全称') or '').strip()}
+                              for row in rows)
         # A drastically reduced snapshot is likely incomplete; retain the previous copy.
         previous=ledger.execute('catalog.search',{})['metadata']
         if previous and len(securities)<previous['count']*0.5: raise ValueError('新目录数量骤降，已保留原目录')
