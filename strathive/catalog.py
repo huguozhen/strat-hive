@@ -11,7 +11,9 @@ from .ledger import LedgerError
 UA = 'Mozilla/5.0'
 
 def fetch(url):
-    request=urllib.request.Request(url,headers={'User-Agent':UA,'Referer':'https://www.sse.com.cn/'})
+    host=urllib.parse.urlsplit(url).hostname or ''
+    referer='https://www.szse.cn/' if host == 'szse.cn' or host.endswith('.szse.cn') else 'https://www.sse.com.cn/'
+    request=urllib.request.Request(url,headers={'User-Agent':UA,'Referer':referer})
     with urllib.request.urlopen(request,timeout=30) as response:
         return response.read(30_000_001)
 

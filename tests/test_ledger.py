@@ -1,10 +1,23 @@
 import tempfile
 import unittest
+import io
 from unittest.mock import patch
 from pathlib import Path
 from strathive.ledger import Ledger, LedgerError
 
 class LedgerTest(unittest.TestCase):
+    def test_exchange_catalog_requests_use_the_matching_exchange_origin(self):
+        from strathive.catalog import fetch
+        requests=[]
+        def respond(request, timeout):
+            requests.append(request)
+            return io.BytesIO(b'data')
+        with patch('urllib.request.urlopen', side_effect=respond):
+            fetch('https://www.szse.cn/api/report/ShowReport')
+            fetch('https://query.sse.com.cn/commonSoaQuery.do')
+        self.assertEqual(requests[0].get_header('Referer'), 'https://www.szse.cn/')
+        self.assertEqual(requests[1].get_header('Referer'), 'https://www.sse.com.cn/')
+
     def test_public_catalog_keeps_provided_legal_names(self):
         from strathive.catalog import sync
         with tempfile.TemporaryDirectory() as d:
