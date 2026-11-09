@@ -1,0 +1,10 @@
+{
+  "retrieved_on": "2026-11-08",
+  "count": 5035,
+  "sources": {
+    "SH stock": "https://www.sse.com.cn/assortment/stock/list/share/",
+    "SH etf": "https://www.sse.com.cn/assortment/fund/etf/list/",
+    "SZ stock": "https://push2.eastmoney.com/api/qt/clist/get",
+    "SZ etf": "https://push2.eastmoney.com/api/qt/clist/get"
+  }
+}
