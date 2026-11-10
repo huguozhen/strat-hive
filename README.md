@@ -1,60 +1,37 @@
 # 策略蜂巢（StratHive）
 
-在本机维护策略运行、资产池和成交记录，并与券商账面数据对账。
+在本机记录券商账户、策略运行、成交和资产交接，并与券商账面数据对账。一次策略运行直接绑定所选策略的一个具体版本及一个资产账户，启动时分配期初资产，结束时结清名下现金与持仓。
 
-## 安装
+## 从源码运行与接入 Agent
 
-下载并解压 `strathive-linux-x86_64.tar.gz`。发布包内置 Python 和 SQLite，适用于 Linux x86-64，已在 Ubuntu 24.04 验证。
+在仓库根目录安装依赖。使用链接了 WAL 并发修复版 SQLite 的 Python。
 
 ```sh
-tar -xzf strathive-linux-x86_64.tar.gz
-export PATH="$PWD/strathive:$PATH"
+uv sync --locked
+export PATH="$PWD/.venv/bin:$PATH"
 strathive --help
 ```
 
-可将第二行添加到 shell 配置中。移动应用时，保留整个解压后的目录。
+将仓库中的 `skills/strathive-ledger` 复制到项目的 `.agents/skills/strathive-ledger`，并让 Codex 会话继承上述 `PATH`。启动新会话后，使用 `$strathive-ledger` 操作账本。正式版本准备好后通过 GitHub Releases 发布。
 
-## 从建账到对账
+## 用 Agent 操作账本
 
-以下示例使用独立的 `demo.sqlite3`，避免操作默认账本。多参数命令使用具名选项，顺序可调整。单条详情可直接跟 ID，例如 `strathive run show 1`。
+可以先用独立账本体验，告诉 Agent：
 
-```sh
-strathive --db demo.sqlite3 db init
+> 使用 $strathive-ledger，在 demo.sqlite3 建一个示例账本。建立一个只有 10,000 元现金的券商账户，佣金费率 0.03%，建账截止时间为 2026-11-01 09:00。创建一个人工策略，并在 2026-11-02 09:00 启动一次运行，分配 2,000 元期初现金。
 
-strathive --db demo.sqlite3 account open --name 券商账户 --cash 10000.00 \
-  --commission-rate 0.0003 --as-of 2026-11-01T09:00:00
+随后可以让 Agent 记录实际成交、查询运行持仓或导入券商快照对账。结束运行时，先告知 Agent 剩余证券是已经卖出，还是要交给同一账户的新运行。关键写入由 Agent 确认所需输入并依据 CLI 结果反馈。
 
-strathive --db demo.sqlite3 strategy create --name 人工策略
-strathive --db demo.sqlite3 pool create --account-id 1 --name 主池
-strathive --db demo.sqlite3 run create --strategy-id 1 --pool-id 1 --name 首期
+## CLI 契约与排障
 
-strathive --db demo.sqlite3 pool allocate --account-id 1 --pool-id 1 \
-  --amount 2000.00 --at 2026-11-02T09:00:00
-strathive --db demo.sqlite3 run status --run-id 1 --status active
+CLI 面向 Agent 和自动化调用。业务命令默认返回 JSON，命令参数用 `--help` 查看。使用全局 `--db PATH` 选择账本。下列接口和 [结构化输入示例](skills/strathive-ledger/references/inputs.md) 描述本版设计，排障时以安装版本的帮助为准。
 
-strathive --db demo.sqlite3 trade add --run-id 1 --security SH.600000 --side buy \
-  --quantity 100 --price 10.00 --at 2026-11-02T09:30:00
-strathive --db demo.sqlite3 run show 1
-
-strathive --db demo.sqlite3 reconcile --account-id 1 --cash 8994.99 --position SH.600000,100
-```
-
-已有账本请使用实际返回的 ID。金额以元为单位，佣金费率用小数填写，`0.0003` 表示 0.03%。未指定时区的时间按北京时间处理。按券商成交回单覆盖费用时，可填写 `--commission`、`--stamp-duty` 或 `--transfer-fee`。
-
-- **更正成交**用 `strathive --db demo.sqlite3 trade edit --trade-id 2 --price 10.10`。需要撤销费用覆盖时，使用更正 JSON。
-- **带持仓建账**在 `account open` 增加 `--opening FILE`。
-- **导入对账**用 `strathive --db demo.sqlite3 reconcile --account-id 1 --file broker.csv`。使用券商账面现金和持仓总量。仅在确认成本口径一致时填写 `--cost-basis moving_average_v1`。
-
-[期初持仓、更正 JSON 和对账 CSV 示例](skills/strathive-ledger/references/inputs.md)
-
-## 帮助、备份与 Agent
-
-- 用 `strathive trade add --help` 查看各字段的含义。短选项 `-n`、`-q`、`-f` 分别对应 `--name`、`--quantity`、`--file`。
-- 用 `strathive db backup --file backup.sqlite3` 备份。用 `strathive --db recovered.sqlite3 db restore --file backup.sqlite3` 恢复到新文件。升级后运行 `strathive db init`。
-- 将发布包中的 `skills/strathive-ledger` 复制到项目的 `.agents/skills/strathive-ledger`，并让 Codex 会话可在 `PATH` 中找到 CLI。启动新会话后可使用 `$strathive-ledger`。Skill 通过全局 `--json` 读取机器可读结果。
+- `strategy create` 生成 `v1`。更新策略资料后可用 `strategy version create --strategy-id ID` 固化新版本。`run create` 可通过 `--version` 指定版本，省略时绑定当时的最新版。
+- `run show ID` 返回绑定版本和运行资产。记成交、带持仓建账及结束运行等写入可通过请求 ID 恢复已提交结果。
+- `strathive db backup --file backup.sqlite3` 创建备份。`strathive --db recovered.sqlite3 db restore --file backup.sqlite3` 恢复到新账本。升级后运行 `strathive db init`，旧账本升级前自动备份。旧账本中标记结束但仍有资产的运行会转为暂停，供用户结清。
 
 ## 本地开发
 
-运行 `uv sync --locked` 安装依赖，使用 `uv run strathive` 运行 CLI，使用 `uv run pytest` 验证。通过 `scripts/build-linux.sh` 构建发布包，构建使用的 Python 需链接带 WAL 并发修复的 SQLite。
+使用 `uv run strathive` 调用 CLI，使用 `uv run pytest` 验证。
 
-离线证券目录包含来源和获取日期。深交所接口不可用时，深圳条目采用东方财富目录。构建时可运行 `scripts/update-securities.py` 更新目录，也可用 `strathive security import --file securities.csv` 导入已有账本。
+离线证券目录记录来源和获取日期。深交所接口不可用时，深圳条目采用东方财富目录。可运行 `scripts/update-securities.py` 更新源码中的目录，也可用 `strathive security import --file securities.csv` 导入已有账本。

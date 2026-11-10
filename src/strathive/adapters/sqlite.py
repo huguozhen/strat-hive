@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 from contextlib import closing, contextmanager
 from pathlib import Path
+from time import time_ns
 
 from alembic import command
 from alembic.config import Config
@@ -16,6 +17,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import OperationalError
 
+from strathive.core.replay import rebuild
 from strathive.core.rules import LedgerError, require
 
 from .schema import instruments, metadata
@@ -64,7 +66,9 @@ class SQLiteStore:
                                     connect_args={"timeout": 5})
         self.migrations = Config()
         self.migrations.set_main_option("script_location", str(Path(__file__).parent / "migrations"))
-        self.head = ScriptDirectory.from_config(self.migrations).get_current_head()
+        scripts = ScriptDirectory.from_config(self.migrations)
+        self.head = scripts.get_current_head()
+        self.revisions = {item.revision for item in scripts.walk_revisions()}
 
     @contextmanager
     def lock(self, *, exclusive=False):
@@ -112,22 +116,47 @@ class SQLiteStore:
             if not self.path.exists():
                 fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
                 os.close(fd)
-            self._initialize_locked(catalog)
-        return {"path": str(self.path), "revision": self.head, "sqlite": sqlite3.sqlite_version}
+            backup = self._initialize_locked(catalog)
+        result = {"path": str(self.path), "revision": self.head, "sqlite": sqlite3.sqlite_version}
+        if backup is not None:
+            result["migration_backup"] = str(backup)
+        return result
 
     def _initialize_locked(self, catalog):
         with self.engine.connect() as connection:
             self.configure(connection)
+            previous = MigrationContext.configure(connection).get_current_revision()
+            connection.commit()
+            backup = None
+            if previous is not None and previous != self.head:
+                backup = self.path.with_name(f"{self.path.name}.pre-{self.head}-{time_ns()}.bak")
+                self._copy_database(self.path, backup, {previous})
             connection.exec_driver_sql("PRAGMA journal_mode=WAL")
             connection.commit()
             connection.exec_driver_sql("BEGIN IMMEDIATE")
             try:
                 self.migrations.attributes["connection"] = connection
                 command.upgrade(self.migrations, "head")
+                if previous is not None and previous != self.head:
+                    # 重放迁移后的事实；校验失败时 SQLite 会回滚整个升级。
+                    tx = Transaction(connection)
+                    for account in tx.find("account"):
+                        before = account["current"]
+                        after = rebuild(tx, account["id"])["current"]
+                        require(all(before[field] == after[field] for field in ("cash", "unallocated_cash", "positions")),
+                                "migration changed account assets", "migration_conflict")
+                        run_ids = self.migrations.attributes.get("legacy_run_ids", {})
+                        for old_id, old_assets in before.get("pools", {}).items():
+                            run_id = run_ids.get(int(old_id))
+                            new_assets = after["runs"].get(str(run_id), {"cash": "0.00", "positions": []})
+                            require(all(old_assets[field] == new_assets[field] for field in ("cash", "positions")),
+                                    f"migration changed run assets: {run_id or old_id}", "migration_conflict")
                 self._put_catalog(connection, catalog, replace=False)
                 connection.commit()
             finally:
                 self.migrations.attributes.pop("connection", None)
+                self.migrations.attributes.pop("legacy_run_ids", None)
+            return backup
 
     @staticmethod
     def _put_catalog(connection, rows, *, replace=True):
@@ -150,18 +179,18 @@ class SQLiteStore:
         require(self.path.is_file(), "initialize the ledger with db init", "not_initialized")
         self.check_sqlite()
         with self.lock():
-            self._copy_database(self.path, Path(destination), self.head)
+            self._copy_database(self.path, Path(destination), self.revisions)
         return {"path": str(Path(destination).resolve())}
 
     def restore(self, source):
         self.check_sqlite()
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         with self.lock(exclusive=True):
-            self._copy_database(Path(source), self.path, self.head)
+            self._copy_database(Path(source), self.path, self.revisions)
         return {"path": str(self.path)}
 
     @staticmethod
-    def _copy_database(source, destination, revision):
+    def _copy_database(source, destination, revisions):
         source = source.resolve()
         destination = destination.resolve()
         require(source.is_file(), f"database does not exist: {source}", "not_found")
@@ -180,7 +209,7 @@ class SQLiteStore:
                     versions = target.execute("SELECT version_num FROM alembic_version").fetchall()
                 except sqlite3.DatabaseError as exc:
                     raise LedgerError("invalid_backup", "backup is not a StratHive ledger") from exc
-                require(versions == [(revision,)], "database schema is incompatible", "invalid_backup")
+                require(len(versions) == 1 and versions[0][0] in revisions, "database schema is incompatible", "invalid_backup")
             os.link(temporary, destination)
         finally:
             os.unlink(temporary)

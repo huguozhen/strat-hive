@@ -20,18 +20,26 @@ strategies = table("strategy", key("id", primary_key=True), value("name"), value
 accounts = table("account", key("id", primary_key=True), value("name"), value("commission_rate"),
                  value("opened_at"), value("initial_cash", Integer), value("current", JSON))
 
-pools = table("pool", key("id", primary_key=True), key("account_id", "account.id"), value("name"), value("initial_cash", Integer))
+versions = table("strategy_version", key("id", primary_key=True), key("strategy_id", "strategy.id"),
+                 value("number", Integer), value("created_at"), value("name"), value("description"),
+                 value("source"), UniqueConstraint("strategy_id", "number"))
 
-runs = table("run", key("id", primary_key=True), key("strategy_id", "strategy.id"),
-             key("pool_id", "pool.id", unique=True), value("name"), value("status"))
+runs = table("run", key("id", primary_key=True), key("strategy_version_id", "strategy_version.id"),
+             key("account_id", "account.id", index=True), value("name"), value("status"),
+             Column("started_at", String), Column("closed_at", String), Column("legacy_status", String),
+             value("opening_cash", Integer))
 
-opening = table("opening_position", key("id", primary_key=True), key("pool_id", "pool.id"),
+opening = table("opening_position", key("id", primary_key=True), key("run_id", "run.id"),
                 value("symbol", ForeignKey("instrument.symbol")), value("quantity", Integer),
-                value("unit_cost"), value("position_date"), UniqueConstraint("pool_id", "symbol"))
+                value("unit_cost"), value("position_date"), Column("valuation_price", String),
+                UniqueConstraint("run_id", "symbol"))
 
 events = table("ledger_event", key("id", primary_key=True), key("account_id", "account.id", index=True),
-               Column("pool_id", ForeignKey("pool.id")), value("effective_at"), value("kind"),
-               value("amount", Integer), sqlite_autoincrement=True)
+               Column("run_id", ForeignKey("run.id")), value("effective_at"), value("kind"),
+               value("amount", Integer), value("details", JSON), sqlite_autoincrement=True)
+
+requests = table("write_request", Column("id", String, primary_key=True), value("fingerprint"),
+                 value("result", JSON))
 
 trades = table("trade", key("id", "ledger_event.id", primary_key=True), key("run_id", "run.id"),
                value("symbol", ForeignKey("instrument.symbol")), value("side"),

@@ -1,4 +1,4 @@
-"""Pure rules shared by the application and its adapters."""
+"""Core 与适配器共用的纯记账规则。"""
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -62,15 +62,15 @@ def timestamp(value):
     try:
         result = datetime.fromisoformat(value)
         require("T" in value or " " in value, "timestamp must include the time")
-    except (TypeError, ValueError) as exc:
-        raise LedgerError("invalid_input", "expected an ISO 8601 timestamp") from exc
-    if result.tzinfo is None:
-        result = result.replace(tzinfo=SHANGHAI)
-    return result.astimezone(timezone.utc).isoformat(timespec="microseconds")
+        if result.tzinfo is None:
+            result = result.replace(tzinfo=SHANGHAI)
+        return result.astimezone(timezone.utc).isoformat(timespec="microseconds")
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise LedgerError("invalid_input", "expected an ISO 8601 timestamp within range") from exc
 
 
 def fees_for(kind, side, effective_at, gross, rate, overrides):
-    """Estimate secondary-market fees, then apply the actual fill overrides."""
+    """按成交日估算费用，再应用用户提供的实际费用。"""
     trade_date = datetime.fromisoformat(effective_at).astimezone(SHANGHAI).date().isoformat()
     require(set(overrides) <= set(FEE_NAMES), "unknown fee override")
     rates = {

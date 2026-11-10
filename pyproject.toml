@@ -20,7 +20,7 @@ dependencies = [
 strathive = "strathive.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8,<10", "pyinstaller>=6.20,<7"]
+dev = ["pytest>=8,<10"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
