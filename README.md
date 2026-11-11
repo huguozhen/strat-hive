@@ -57,4 +57,4 @@ CLI 面向 Agent 和自动化调用。业务命令默认返回 JSON，命令参�
 
 离线证券目录记录来源和获取日期。深交所接口不可用时，深圳条目采用东方财富目录。可运行 `uv run python scripts/update-securities.py` 更新源码中的离线目录。
 
-维护者可运行 `./scripts/build-deb.sh` 构建 `.deb` 和 `SHA256SUMS`。推送与 `pyproject.toml` 版本一致的 `vX.Y.Z` 标签后，GitHub Actions 运行测试和干净环境的安装检查，并创建 Release 草稿供维护者核对发布。 [实施计划](docs/银河数据源与Linux发布实施计划.md)
+维护者可运行 `./scripts/build-deb.sh` 构建 `.deb` 和 `SHA256SUMS`。推送与 `pyproject.toml` 版本一致的 `vX.Y.Z` 标签后，GitHub Actions 验证 Ubuntu 安装和包内运行时，再创建 Release 草稿供维护者核对发布。 [实施计划](docs/银河数据源与Linux发布实施计划.md)

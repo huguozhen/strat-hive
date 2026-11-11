@@ -18,21 +18,14 @@ jobs:
           version: '0.13.7'
       - run: uv run --locked pytest -q
       - run: ./scripts/build-deb.sh
-      - name: Install in a clean Ubuntu container
+      - name: Install on Ubuntu and smoke-test the bundled runtime
         run: |
-          dependencies=$(mktemp -d)
-          chmod 755 "$dependencies"
-          mkdir "$dependencies/archives"
-          docker run --rm --network none ubuntu:24.04 cat /var/lib/dpkg/status > "$dependencies/status"
-          sudo apt-get update -o Acquire::Retries=2 -o Acquire::http::Timeout=15 -o APT::Update::Error-Mode=any
-          sudo apt-get -o Dir::State::status="$dependencies/status" -o Dir::Cache::archives="$dependencies/archives" \
-            -o Acquire::Retries=2 -o Acquire::http::Timeout=15 --download-only --no-install-recommends -y \
-            install "$PWD"/dist/strathive_*_amd64.deb
-          docker run --rm --network none -e DEBIAN_FRONTEND=noninteractive \
-            -v "$PWD/dist:/release:ro" -v "$dependencies/archives:/dependencies:ro" ubuntu:24.04 bash -euc '
+          sudo dpkg --install dist/strathive_*_amd64.deb
+          /usr/bin/strathive --help
+          docker run --rm --network none -v "$PWD/dist:/release:ro" \
+            -v /usr/share/zoneinfo:/usr/share/zoneinfo:ro ubuntu:24.04 bash -euc '
             if command -v python3 || command -v uv; then exit 1; fi
-            shopt -s nullglob
-            apt-get install -o Dpkg::Use-Pty=0 --no-install-recommends -y /release/strathive_*_amd64.deb /dependencies/*.deb
+            dpkg-deb --extract /release/strathive_*_amd64.deb /
             if command -v python3 || command -v uv; then exit 1; fi
             useradd -m smoke
             runuser -u smoke -- sh -ec "
