@@ -32,7 +32,7 @@ jobs:
             -v "$PWD/dist:/release:ro" -v "$dependencies/archives:/dependencies:ro" ubuntu:24.04 bash -euc '
             if command -v python3 || command -v uv; then exit 1; fi
             shopt -s nullglob
-            apt-get install --no-download --no-install-recommends -y /release/strathive_*_amd64.deb /dependencies/*.deb
+            apt-get install -o Dpkg::Use-Pty=0 --no-install-recommends -y /release/strathive_*_amd64.deb /dependencies/*.deb
             if command -v python3 || command -v uv; then exit 1; fi
             useradd -m smoke
             runuser -u smoke -- sh -ec "
