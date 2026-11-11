@@ -2,7 +2,7 @@
 
 ## 1. 架构与交付
 
-策略蜂巢是个人本地应用。用户通过 Agent Skills 操作账本。CLI 是供 Agent 调用的本机机器接口，在进程内调用 Python Core 并于命令完成后退出。SQLite 账本位于本机应用数据目录。开发阶段从源码运行，正式版本通过 GitHub Releases 交付。
+策略蜂巢是个人本地应用。用户通过 Agent Skills 操作账本。CLI 是供 Agent 调用的本机机器接口，在进程内调用 Python Core 并于命令完成后退出。SQLite 账本默认位于本机应用数据目录，也可选择已有文件或指定新建目录。开发阶段从源码运行，正式版本通过 GitHub Releases 交付。
 
 ```text
 用户 ── Agent + Skills ── CLI ── Core ── SQLite
@@ -37,6 +37,8 @@ Rotki 的本地 Python 应用和 SQLite 存储可作为交付参考。VeighNa �
 
 运行结束时需验证持仓通过真实卖出或交接归零，并释放全部剩余现金。同账户交接同时关闭旧运行和启动新运行，成对记录转出与转入；账户总现金、证券数量和历史账本成本保持连续。交接估值与账本成本分别保存，来源和时间随估值记录。双方绩效使用同一个值，缺少估值时返回待估值状态。 [持仓成本调研](research/position-cost.md)
 
+核心业务事实保存在可独立备份和恢复的 SQLite 账本，包含解释历史成交、持仓和交接所需的证券引用及已确认估值。可重建的第三方证券目录使用独立 SQLite 文件，后续行情使用独立目录，配置及凭据单独存放。新增数据按可重建性和对历史业务结果的影响决定归属。 [存储布局与安装流程](银河数据源与Linux发布实施计划.md#2-账本选择与数据存储)
+
 SQLite 使用 WAL 和短写事务，启动时校验运行时包含 WAL 并发修复。数据库升级由 Alembic 管理，迁移前保留一致性备份。迁移验证账户和运行的现金、持仓、成交归属及历史资金事实，既有运行期间的资金变动按原事实保留。既有策略按迁移时可见的名称和描述生成带来源标记的初始版本，既有运行绑定该版本。迁移来源表示当时可取得的快照。旧账本标记为结束但仍有资产的运行迁移为暂停并保留原状态，等待用户结清；有余额或历史流水但尚无运行归属的旧记录迁入专门的暂停运行，以便继续归还资金。 [SQLite WAL](https://sqlite.org/wal.html)
 
 ## 4. 项目结构
@@ -70,4 +72,4 @@ docs/
 
 下一期通过按需启动的本机 FastAPI 复用同一 Core，使用 React、TypeScript 和 Vite 实现 Web UI。Web 客户端由 OpenAPI 生成，表格和查询使用 TanStack，仪表盘按需引入 Apache ECharts。Agent Skills 随分析和复盘扩展，CLI 提供对应机器接口。TUI 如有需求，也复用同一 Core。 [FastAPI SDK 生成](https://fastapi.tiangolo.com/advanced/generate-clients/) · [Apache ECharts](https://echarts.apache.org/en/feature.html)
 
-后续行情适配器负责增量同步。行情历史可保存为 Parquet，Polars 用于批量计算，按需使用 DuckDB 提供本地分析查询。行情估值用于市值仓位和运行绩效，真实账本与模拟运行分别存储。 [Polars 流式执行](https://docs.pola.rs/user-guide/concepts/streaming/) · [DuckDB Parquet 查询](https://duckdb.org/docs/stable/data/parquet/overview.html)
+后续行情适配器负责增量同步。行情历史在独立目录保存为 SQLite 或 Parquet，Polars 用于批量计算，按需使用 DuckDB 提供本地分析查询。行情估值用于市值仓位和运行绩效，真实账本与模拟运行分别存储。 [Polars 流式执行](https://docs.pola.rs/user-guide/concepts/streaming/) · [DuckDB Parquet 查询](https://duckdb.org/docs/stable/data/parquet/overview.html)

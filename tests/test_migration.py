@@ -33,8 +33,7 @@ def test_legacy_funding_and_open_ended_run_migrate(tmp_path):
         insert("ledger_event", id=9, account_id=1, pool_id=3, effective_at="2026-11-02T01:00:00.000000+00:00",
                kind="allocate", amount=10_000)
 
-    result = store.initialize([{"symbol": "SH.600000", "market": "SH", "code": "600000", "kind": "stock",
-                                "name": "浦发银行", "full_name": "上海浦东发展银行股份有限公司"}])
+    result = store.initialize()
     assert Path(result["migration_backup"]).is_file()
     run = ledger.runs(7)
     assert run["status"] == "paused" and run["legacy_status"] == "ended"

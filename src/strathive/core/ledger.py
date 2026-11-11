@@ -25,14 +25,14 @@ def commission(value):
     return str(rate)
 
 
-def resolve(tx, value):
+def resolve(find, value):
     value = name(value, "security")
-    candidates = tx.find("instrument", symbol=value.upper())
+    candidates = find(symbol=value.upper())
     if not candidates:
         field = "code" if value.isascii() and value.isdigit() else "name"
-        candidates = tx.find("instrument", **{field: value})
+        candidates = find(**{field: value})
         if field == "name":
-            by_symbol = {row["symbol"]: row for row in (*candidates, *tx.find("instrument", full_name=value))}
+            by_symbol = {row["symbol"]: row for row in (*candidates, *find(full_name=value))}
             candidates = list(by_symbol.values())
     require(bool(candidates), f"unknown security: {value}", "not_found")
     require(len(candidates) == 1, f"ambiguous security: {value}; use SH.###### or SZ.######")
@@ -46,8 +46,26 @@ class Ledger:
         self.store = store
 
     def instrument(self, security):
-        with self.store.transaction() as tx:
-            return resolve(tx, security)
+        return resolve(self.store.catalog.find, security)
+
+    def _instrument(self, tx, security, *, capture=False):
+        """账本优先使用已入账的证券身份，首次入账时保存独立快照。"""
+        def find(**filters):
+            local = tx.find("instrument", **filters)
+            if local and "symbol" in filters:
+                return local
+            by_symbol = {row["symbol"]: row for row in self.store.catalog.find(**filters)}
+            by_symbol.update((row["symbol"], row) for row in local)
+            return list(by_symbol.values())
+
+        instrument = resolve(find, security)
+        if not capture:
+            return instrument
+        existing = tx.find("instrument", symbol=instrument["symbol"])
+        if existing:
+            return existing[0]
+        return tx.add("instrument", **{key: instrument[key] for key in
+                      ("symbol", "code", "market", "kind", "name", "full_name")})
 
     def create_strategy(self, title, description=""):
         with self.store.transaction(write=True) as tx:
@@ -113,7 +131,7 @@ class Ledger:
                 "positions and allocations must be arrays")
         holdings = {}
         for row in positions:
-            symbol = resolve(tx, row["security"])["symbol"]
+            symbol = self._instrument(tx, row["security"], capture=True)["symbol"]
             require(symbol not in holdings, "duplicate opening security")
             try:
                 position_date = date.fromisoformat(row["position_date"])
@@ -135,7 +153,7 @@ class Ledger:
                          opening_cash=money(allocation.get("cash", "0"), "opening run cash"))
             seen = set()
             for row in assigned:
-                symbol = resolve(tx, row["security"])["symbol"]
+                symbol = self._instrument(tx, row["security"])["symbol"]
                 require(symbol not in seen, "duplicate opening security in the same run")
                 seen.add(symbol)
                 count = quantity(row["quantity"])
@@ -222,7 +240,7 @@ class Ledger:
         require(isinstance(valuations, (list, tuple)), "valuations must be an array")
         marks = {}
         for row in valuations:
-            symbol = resolve(tx, row["security"])["symbol"]
+            symbol = self._instrument(tx, row["security"])["symbol"]
             require(symbol not in marks, f"duplicate valuation: {symbol}")
             marks[symbol] = {"price": str(decimal(row["price"], "valuation price", positive=True)),
                              "source": name(row["source"], "valuation source")}
@@ -269,7 +287,7 @@ class Ledger:
         run = tx.get("run", run_id)
         account = tx.get("account", run["account_id"])
         effective_at = self._trade_time(account, run, effective_at)
-        instrument = resolve(tx, security)
+        instrument = self._instrument(tx, security, capture=True)
         details = self._trade_details(instrument, side, count, price, effective_at,
                                       account["commission_rate"], overrides or {})
         event = self._event(tx, account["id"], "trade", effective_at, run_id=run_id)
@@ -280,12 +298,13 @@ class Ledger:
     def edit_trade(self, trade_id, changes):
         with self.store.transaction(write=True) as tx:
             trade = tx.get("trade", trade_id)
+            previous_symbol = trade["symbol"]
             event = tx.get("ledger_event", trade_id)
             account = tx.get("account", event["account_id"])
             run = tx.get("run", trade["run_id"])
             effective_at = self._trade_time(account, run, changes.get("effective_at", event["effective_at"]),
                                             existing_at=event["effective_at"])
-            instrument = resolve(tx, changes.get("security", trade["symbol"]))
+            instrument = self._instrument(tx, changes.get("security", trade["symbol"]), capture=True)
             details = {}
             if changes.keys() & {"effective_at", "security", "side", "quantity", "price", "overrides"}:
                 overrides = {**trade["overrides"], **changes.get("overrides", {})}
@@ -297,15 +316,18 @@ class Ledger:
             trade = tx.update("trade", trade_id, **details, reason=changes.get("reason", trade["reason"]),
                               note=changes.get("note", trade["note"]))
             event = tx.update("ledger_event", trade_id, effective_at=effective_at)
+            if trade["symbol"] != previous_symbol:
+                tx.remove_unused_instrument(previous_symbol)
             rebuild(tx, account["id"])
             return self._present_trade(trade, event, instrument)
 
     def delete_trade(self, trade_id):
         with self.store.transaction(write=True) as tx:
-            tx.get("trade", trade_id)
+            trade = tx.get("trade", trade_id)
             event = tx.get("ledger_event", trade_id)
             tx.remove("trade", trade_id)
             tx.remove("ledger_event", trade_id)
+            tx.remove_unused_instrument(trade["symbol"])
             rebuild(tx, event["account_id"])
             return {"id": trade_id, "deleted": True}
 
@@ -313,7 +335,7 @@ class Ledger:
         with self.store.transaction() as tx:
             trade = tx.get("trade", trade_id)
             return self._present_trade(trade, tx.get("ledger_event", trade_id),
-                                       resolve(tx, trade["symbol"]))
+                                       tx.get("instrument", trade["symbol"]))
 
     def trades(self, run_id=None, security=None, start=None, end=None):
         with self.store.transaction() as tx:
@@ -327,7 +349,7 @@ class Ledger:
             expected = {p["symbol"]: p for p in current["positions"]}
             external = {}
             for row in positions:
-                symbol = resolve(tx, row["security"])["symbol"]
+                symbol = self._instrument(tx, row["security"])["symbol"]
                 require(symbol not in external, f"duplicate broker position: {symbol}")
                 count = quantity(row["quantity"], positive=False)
                 unit_cost = row.get("unit_cost")
@@ -411,7 +433,13 @@ class Ledger:
             tx.get("run", run_id)
             where["run_id"] = run_id
         if security is not None:
-            where["symbol"] = resolve(tx, security)["symbol"]
+            try:
+                instrument = resolve(lambda **filters: tx.find("instrument", **filters), security)
+            except LedgerError as exc:
+                if exc.code != "not_found":
+                    raise
+                instrument = self.instrument(security)
+            where["symbol"] = instrument["symbol"]
         start = timestamp(start) if start is not None else ""
         end = timestamp(end) if end is not None else "~"
         require(start <= end, "start must be at or before end")

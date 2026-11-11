@@ -20,7 +20,8 @@ CATALOG = [
 @pytest.fixture
 def ledger(tmp_path):
     app, store = build(tmp_path / "ledger.sqlite3")
-    store.initialize(CATALOG)
+    store.initialize()
+    store.catalog.prepare(CATALOG)
     return app
 
 

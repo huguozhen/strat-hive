@@ -1,11 +1,11 @@
 from pathlib import Path
 
-from platformdirs import user_data_path
-
+from . import settings
+from .adapters.catalog import Catalog
 from .adapters.sqlite import SQLiteStore
 from .core.ledger import Ledger
 
 
 def build(path: Path | None = None):
-    store = SQLiteStore(path if path is not None else user_data_path("strathive") / "ledger.sqlite3")
+    store = SQLiteStore(path if path is not None else settings.ledger_path(), Catalog(settings.catalog_path()))
     return Ledger(store), store

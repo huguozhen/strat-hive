@@ -12,15 +12,14 @@ from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import create_engine, delete, insert, select, update
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy import create_engine, delete, insert, inspect, select, update
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import OperationalError
 
 from strathive.core.replay import rebuild
 from strathive.core.rules import LedgerError, require
 
-from .schema import instruments, metadata
+from .schema import instruments, metadata, opening, trades
 
 
 class Transaction:
@@ -58,10 +57,18 @@ class Transaction:
         table = metadata.tables[entity]
         self.connection.execute(delete(table).where(table.c.id == identifier))
 
+    def remove_unused_instrument(self, symbol):
+        self.connection.execute(delete(instruments).where(
+            instruments.c.symbol == symbol,
+            ~select(trades.c.symbol).where(trades.c.symbol == symbol).exists(),
+            ~select(opening.c.symbol).where(opening.c.symbol == symbol).exists(),
+        ))
+
 
 class SQLiteStore:
-    def __init__(self, path):
+    def __init__(self, path, catalog):
         self.path = Path(path).expanduser().resolve()
+        self.catalog = catalog
         self.engine = create_engine(URL.create("sqlite", database=str(self.path)),
                                     connect_args={"timeout": 5})
         self.migrations = Config()
@@ -109,28 +116,50 @@ class SQLiteStore:
                 raise LedgerError("busy", "ledger is busy; retry") from exc
             raise
 
-    def initialize(self, catalog):
+    def initialize(self, *, existing=None):
+        """创建或升级账本，旧版目录先移入可独立重建的目录库。"""
         self.check_sqlite()
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         with self.lock(exclusive=True):
-            if not self.path.exists():
+            exists = self.path.exists()
+            if existing is True:
+                require(self.path.is_file(), "ledger file does not exist", "not_found")
+            if existing is False:
+                require(not exists, "ledger already exists; open the existing file", "already_exists")
+            if not exists:
                 fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
                 os.close(fd)
-            backup = self._initialize_locked(catalog)
+            else:
+                require(os.access(self.path, os.W_OK), "ledger file is not writable", "invalid_ledger")
+            try:
+                backup = self._initialize_locked(exists)
+            except Exception:
+                if not exists:
+                    self.engine.dispose()
+                    self.path.unlink(missing_ok=True)
+                raise
         result = {"path": str(self.path), "revision": self.head, "sqlite": sqlite3.sqlite_version}
         if backup is not None:
             result["migration_backup"] = str(backup)
         return result
 
-    def _initialize_locked(self, catalog):
+    def _initialize_locked(self, exists):
         with self.engine.connect() as connection:
             self.configure(connection)
             previous = MigrationContext.configure(connection).get_current_revision()
+            if exists:
+                required = {"account", "strategy", "trade", "instrument", "pool"} if previous == "0001" else set(metadata.tables)
+                require(previous in self.revisions and required <= set(inspect(connection).get_table_names()),
+                        "file is not a compatible StratHive ledger", "invalid_ledger")
             connection.commit()
             backup = None
             if previous is not None and previous != self.head:
                 backup = self.path.with_name(f"{self.path.name}.pre-{self.head}-{time_ns()}.bak")
                 self._copy_database(self.path, backup, {previous})
+                rows = connection.execute(select(instruments)).mappings().all()
+                if rows:
+                    self.catalog.prepare(rows)
+                connection.commit()
             connection.exec_driver_sql("PRAGMA journal_mode=WAL")
             connection.commit()
             connection.exec_driver_sql("BEGIN IMMEDIATE")
@@ -145,35 +174,21 @@ class SQLiteStore:
                         after = rebuild(tx, account["id"])["current"]
                         require(all(before[field] == after[field] for field in ("cash", "unallocated_cash", "positions")),
                                 "migration changed account assets", "migration_conflict")
+                        if previous == "0002":
+                            require(before["runs"] == after["runs"], "migration changed run assets", "migration_conflict")
                         run_ids = self.migrations.attributes.get("legacy_run_ids", {})
                         for old_id, old_assets in before.get("pools", {}).items():
                             run_id = run_ids.get(int(old_id))
                             new_assets = after["runs"].get(str(run_id), {"cash": "0.00", "positions": []})
                             require(all(old_assets[field] == new_assets[field] for field in ("cash", "positions")),
                                     f"migration changed run assets: {run_id or old_id}", "migration_conflict")
-                self._put_catalog(connection, catalog, replace=False)
+                require(not connection.exec_driver_sql("PRAGMA foreign_key_check").first(),
+                        "migration left invalid references", "migration_conflict")
                 connection.commit()
             finally:
                 self.migrations.attributes.pop("connection", None)
                 self.migrations.attributes.pop("legacy_run_ids", None)
             return backup
-
-    @staticmethod
-    def _put_catalog(connection, rows, *, replace=True):
-        statement = sqlite_insert(instruments)
-        if replace:
-            statement = statement.on_conflict_do_update(
-                index_elements=["symbol"],
-                set_={key: statement.excluded[key] for key in ("name", "full_name", "kind")},
-            )
-        else:
-            statement = statement.on_conflict_do_nothing(index_elements=["symbol"])
-        connection.execute(statement, rows)
-
-    def update_catalog(self, rows):
-        with self.transaction(write=True) as tx:
-            self._put_catalog(tx.connection, rows)
-        return {"count": len(rows)}
 
     def backup(self, destination):
         require(self.path.is_file(), "initialize the ledger with db init", "not_initialized")

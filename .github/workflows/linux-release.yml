@@ -1,0 +1,66 @@
+name: Linux release
+
+on:
+  pull_request:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: '0.13.7'
+      - run: uv run --locked pytest -q
+      - run: ./scripts/build-deb.sh
+      - name: Install in a clean Ubuntu container
+        run: |
+          docker run --rm -v "$PWD/dist:/release:ro" ubuntu:24.04 bash -euc '
+            if command -v python3 || command -v uv; then exit 1; fi
+            apt-get update
+            apt-get install -y /release/strathive_*_amd64.deb
+            if command -v python3 || command -v uv; then exit 1; fi
+            useradd -m smoke
+            runuser -u smoke -- sh -ec "
+              printf \"2\\n\\n3\\n\" | strathive setup
+              strathive db init
+              strathive security lookup SH.510300
+              strathive db backup --file /home/smoke/backup.sqlite3
+              strathive --db /home/smoke/restored.sqlite3 db restore --file /home/smoke/backup.sqlite3
+              test -f /usr/share/strathive/skills/strathive-ledger/SKILL.md
+            "
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: strathive-linux-amd64
+          path: |
+            dist/strathive_*_amd64.deb
+            dist/SHA256SUMS
+
+  release-draft:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: strathive-linux-amd64
+          path: dist
+      - name: Create or update the release draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if draft=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft); then
+            test "$draft" = true
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --draft --generate-notes
+          fi

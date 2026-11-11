@@ -12,15 +12,17 @@ import typer
 from alembic.util import CommandError
 from sqlalchemy.exc import SQLAlchemyError
 
+from strathive import settings
 from strathive.adapters.files import broker_csv, catalog_file, json_file
 from strathive.bootstrap import build
 from strathive.core.rules import LedgerError, require
+from strathive.sources.sync import SOURCE_NAMES, synchronize
 
 app = typer.Typer(help="策略蜂巢本地账本。用 子命令 --help 查看用法。", no_args_is_help=True,
                   add_completion=False)
 GROUP_HELP = {
     "db": "初始化、备份和恢复账本。",
-    "security": "查询或导入证券目录。",
+    "security": "查询、导入或同步证券目录。",
     "strategy": "管理人工策略。",
     "account": "管理券商账户和资金进出。",
     "run": "管理策略运行。",
@@ -83,14 +85,21 @@ def output(value):
 
 
 @app.callback()
-def setup(ctx: typer.Context, db: Path | None = typer.Option(None, help="指定本地账本文件。"),
-          json_output: bool = typer.Option(False, "--json", hidden=True)):
+def root(ctx: typer.Context, db: Path | None = typer.Option(None, help="指定本地账本文件。"),
+         json_output: bool = typer.Option(False, "--json", hidden=True)):
     ctx.obj = Session(db)
+
+
+@app.command("setup", help="选择账本、配置证券数据源和每日同步。")
+def setup(ctx: typer.Context):
+    from .setup import run
+
+    run(ctx.obj.store.catalog)
 
 
 @groups["db"].command("init", help="初始化或升级本地账本。")
 def init(ctx: typer.Context):
-    output(ctx.obj.store.initialize(catalog_file()))
+    output(ctx.obj.store.initialize())
 
 
 @groups["db"].command("backup", help="备份账本到新文件。")
@@ -110,7 +119,23 @@ def security(ctx: typer.Context, query: str):
 
 @groups["security"].command("import", help="导入证券目录 CSV。")
 def import_security(ctx: typer.Context, file: File):
-    output(ctx.obj.store.update_catalog(catalog_file(file)))
+    catalog = ctx.obj.store.catalog
+    with catalog.refresh_lock():
+        output(catalog.update(catalog_file(file)))
+
+
+@groups["security"].command("sync", help="从已配置的来源刷新独立证券目录。")
+def sync_security(ctx: typer.Context, if_stale: bool = typer.Option(False, help="当天已成功时跳过。")):
+    catalog = ctx.obj.store.catalog
+    with catalog.refresh_lock():
+        output(synchronize(catalog, settings.settings(), if_stale=if_stale))
+
+
+@groups["security"].command("sync-status", help="查询当前来源的最近一次尝试和成功记录。")
+def security_status(ctx: typer.Context):
+    source = settings.settings().get("source")
+    require(source in SOURCE_NAMES, "请先运行 strathive setup 配置数据源。", "source_not_configured")
+    output(ctx.obj.store.catalog.status(source))
 
 
 @groups["strategy"].command("create", help="创建人工策略。")
@@ -309,6 +334,8 @@ def main():
         args = ["--json", *(item for item in args[:options_end] if item != "--json"), *args[options_end:]]
     try:
         return app(args=args, standalone_mode=False) or 0
+    except click.Abort:
+        code, message, status = "cancelled", "操作已取消。", 1
     except click.ClickException as exc:
         code, message, status = "invalid_input", exc.format_message(), exc.exit_code
     except LedgerError as exc:
