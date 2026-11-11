@@ -1,0 +1,7 @@
+[Unit]
+Description=Refresh StratHive security directory
+
+[Service]
+Type=oneshot
+ExecStart=@COMMAND@ security sync --if-stale
+TimeoutStartSec=150
