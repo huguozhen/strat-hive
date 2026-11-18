@@ -8,6 +8,7 @@ description: Use the local StratHive CLI to open broker-backed asset accounts, m
 3. Apply the relevant workflow:
    - **Version a strategy**: Use `strategy version create --strategy-id ID` to freeze the current name and description. Use version list or show to resolve a requested version. When creating a run, pass `--version` if the user specifies one. Otherwise the CLI binds the latest at creation. Report the bound version from the result.
    - **Open or start**: Identify the asset account and confirm the starting cash and time. For existing holdings, use the [opening format](references/inputs.md#期初持仓) and allocate the full declared quantity. Starting cash is fixed at the run boundary.
+   - **Set commissions**: When opening an account or changing its rates, use the [commission settings](references/inputs.md#佣金费率) to apply the user's stock and ETF rates separately.
    - **Record or correct**: Enter executed trades and actual fee overrides supplied by the user. Before deleting a trade, show the identified record and obtain authorization.
    - **Close or hand off**: Confirm the source run and intended close time. For a handoff, identify the draft successor in the same account and confirm its starting cash. Use the [handoff format](references/inputs.md#结束与持仓交接) if the user supplies a valuation.
    - **Reconcile**: Use the [broker snapshot format](references/inputs.md#对账-csv). Report cash and quantity differences separately from incomparable costs. Select a cost basis only when the user confirms it matches.

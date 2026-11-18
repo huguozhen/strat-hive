@@ -21,8 +21,8 @@ def invoke(db, *args):
 
 def test_cli_packaging_inputs_and_concurrency(tmp_path):
     db = tmp_path / "ledger.db"
-    assert invoke(db, "db", "init")["revision"] == "0003"
-    assert invoke(db, "db", "init")["revision"] == "0003"
+    assert invoke(db, "db", "init")["revision"] == "0004"
+    assert invoke(db, "db", "init")["revision"] == "0004"
     assert invoke(db, "security", "lookup", "000001")["market"] == "SZ"
     assert invoke(db, "security", "lookup", "SH.510300")["kind"] == "etf"
     account = invoke(db, "account", "open", "--name", "test", "--cash", "100", "--commission-rate", "0.0003",
@@ -104,3 +104,31 @@ def test_opening_to_broker_reconciliation(tmp_path):
     rejected = command(db, "run", "start", "--run-id", "2", "--cash", "10", "--at", "2026-11-04T09:00:00")
     assert rejected.returncode == 5
     assert json.loads(rejected.stdout)["error"]["code"] == "ledger_conflict"
+
+
+def test_account_commission_rates_by_security_kind(tmp_path):
+    db = tmp_path / "ledger.db"
+    invoke(db, "db", "init")
+    account = invoke(db, "account", "open", "--name", "分类费率", "--cash", "1000000",
+                     "--stock-commission-rate", "0.0003", "--etf-commission-rate", "0.0001",
+                     "--as-of", "2026-11-01T09:00:00")
+    account_id = str(account["id"])
+    assert account["commission_rate"] == "0.0003"
+    assert account["etf_commission_rate"] == "0.0001"
+    assert invoke(db, "account", "list")[0] == account
+    updated = invoke(db, "account", "edit", "--account-id", account_id, "--etf-commission-rate", "0.0002")
+    assert updated["commission_rate"] == "0.0003"
+    assert updated["etf_commission_rate"] == "0.0002"
+    updated = invoke(db, "account", "edit", "--account-id", account_id, "--stock-commission-rate", "0.0004")
+    assert updated["commission_rate"] == "0.0004"
+    assert updated["etf_commission_rate"] == "0.0002"
+    strategy = invoke(db, "strategy", "create", "--name", "费率验证")
+    run = invoke(db, "run", "create", "--strategy-id", str(strategy["id"]),
+                 "--account-id", account_id, "--name", "交易")
+    invoke(db, "run", "start", "--run-id", str(run["id"]), "--cash", "1000000", "--at", "2026-11-02T09:00:00")
+    for security, fee in (("SH.600000", "40.00"), ("SH.510300", "20.00")):
+        trade = invoke(db, "trade", "add", "--run-id", str(run["id"]), "--security", security,
+                       "--side", "buy", "-q", "10000", "--price", "10", "--at", "2026-11-02T09:30:00")
+        assert trade["fees"]["commission"] == fee
+    updated = invoke(db, "account", "edit", "--account-id", account_id, "--commission-rate", "0.0005")
+    assert updated["commission_rate"] == updated["etf_commission_rate"] == "0.0005"

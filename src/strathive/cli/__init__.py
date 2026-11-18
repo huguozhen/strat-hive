@@ -38,7 +38,6 @@ RunId = Annotated[int, typer.Option(help="策略运行 ID。")]
 TradeId = Annotated[int, typer.Option(help="成交记录 ID。")]
 At = Annotated[str, typer.Option(help="实际发生时间，ISO 8601，默认北京时间。")]
 Amount = Annotated[str, typer.Option(help="资金金额，单位为元。")]
-Rate = Annotated[str, typer.Option(help="佣金费率小数，例如 0.0003 表示 0.03%。")]
 Description = Annotated[str, typer.Option(help="策略描述。")]
 File = Annotated[Path, typer.Option("--file", "-f", help="输入文件路径。")]
 Security = Annotated[str, typer.Option(help="证券代码或目录中的准确名称。")]
@@ -54,7 +53,9 @@ Note = Annotated[str, typer.Option(help="备注。")]
 NameOption = Annotated[str | None, typer.Option("--name", "-n", help="名称。")]
 RunIdOption = Annotated[int | None, typer.Option(help="策略运行 ID。")]
 AtOption = Annotated[str | None, typer.Option(help="实际发生时间，ISO 8601，默认北京时间。")]
-RateOption = Annotated[str | None, typer.Option(help="佣金费率小数，例如 0.0003 表示 0.03%。")]
+RateOption = Annotated[str | None, typer.Option(help="统一设置股票和 ETF 佣金费率，分类参数优先。0.0003 表示 0.03%。")]
+StockRateOption = Annotated[str | None, typer.Option(help="股票佣金费率，0.0003 表示 0.03%。")]
+EtfRateOption = Annotated[str | None, typer.Option(help="ETF 佣金费率，0.0001 表示 0.01%。")]
 DescriptionOption = Annotated[str | None, typer.Option(help="策略描述。")]
 FileOption = Annotated[Path | None, typer.Option("--file", "-f", help="输入文件路径。")]
 SecurityOption = Annotated[str | None, typer.Option(help="证券代码或目录中的准确名称。")]
@@ -176,12 +177,15 @@ def version_show(ctx: typer.Context, strategy_id: StrategyId, version: Version):
 
 @groups["account"].command("open", help="建立券商账户。")
 def account_open(ctx: typer.Context, name: Name, cash: Annotated[str, typer.Option(help="期初现金，单位为元。")],
-                 commission_rate: Rate, as_of: Annotated[str, typer.Option(help="建账截止时间，默认北京时间。")],
+                 as_of: Annotated[str, typer.Option(help="建账截止时间，默认北京时间。")],
+                 commission_rate: RateOption = None, stock_commission_rate: StockRateOption = None,
+                 etf_commission_rate: EtfRateOption = None,
                  opening: Annotated[Path | None, typer.Option(help="期初持仓与运行分配 JSON 文件。")] = None,
                  request_id: RequestId = None):
     details = json_file(opening) if opening else {}
     require(set(details) <= {"positions", "allocations"}, "unexpected opening input field")
-    output(ctx.obj.ledger.open_account(name, cash, commission_rate, as_of, request_id=request_id, **details))
+    output(ctx.obj.ledger.open_account(name, cash, commission_rate, as_of, stock_rate=stock_commission_rate,
+                                      etf_rate=etf_commission_rate, request_id=request_id, **details))
 
 
 @groups["account"].command("list", help="列出券商账户。")
@@ -196,8 +200,10 @@ def account_show(ctx: typer.Context, account_id: int):
 
 @groups["account"].command("edit", help="修改账户名称或佣金费率。")
 def account_edit(ctx: typer.Context, account_id: AccountId, name: NameOption = None,
-                 commission_rate: RateOption = None):
-    output(ctx.obj.ledger.edit_account(account_id, name, commission_rate))
+                 commission_rate: RateOption = None, stock_commission_rate: StockRateOption = None,
+                 etf_commission_rate: EtfRateOption = None):
+    output(ctx.obj.ledger.edit_account(account_id, name, commission_rate,
+                                      stock_rate=stock_commission_rate, etf_rate=etf_commission_rate))
 
 
 @groups["account"].command("deposit", help="录入外部入金。")

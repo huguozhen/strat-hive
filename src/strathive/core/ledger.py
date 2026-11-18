@@ -118,12 +118,24 @@ class Ledger:
                 return self._resolve_version(tx, strategy_id, version)
             return sorted(tx.find("strategy_version", strategy_id=strategy_id), key=lambda row: row["number"])
 
-    def open_account(self, title, cash, rate, as_of, positions=(), allocations=(), *, request_id=None):
+    def open_account(self, title, cash, rate=None, as_of=None, positions=(), allocations=(), *,
+                     stock_rate=None, etf_rate=None, request_id=None):
         """在同一事务创建账户和承接存量持仓的运行。"""
-        return recoverable_write(self.store, "account.open", self._open_account, request_id, title=title, cash=cash, rate=rate,
-                                 as_of=as_of, positions=positions, allocations=allocations)
+        inputs = dict(title=title, cash=cash, rate=rate, as_of=as_of, positions=positions, allocations=allocations)
+        # 保持旧调用的请求指纹，使升级前的建账请求仍可恢复。
+        if stock_rate is not None:
+            inputs["stock_rate"] = stock_rate
+        if etf_rate is not None:
+            inputs["etf_rate"] = etf_rate
+        return recoverable_write(self.store, "account.open", self._open_account, request_id, **inputs)
 
-    def _open_account(self, tx, title, cash, rate, as_of, positions, allocations):
+    def _open_account(self, tx, title, cash, rate, as_of, positions, allocations, stock_rate=None, etf_rate=None):
+        stock_rate = stock_rate if stock_rate is not None else rate
+        etf_rate = etf_rate if etf_rate is not None else rate
+        require(stock_rate is not None, "stock commission rate is required")
+        if etf_rate is None:
+            etf_rate = stock_rate
+        stock_rate, etf_rate = commission(stock_rate), commission(etf_rate)
         opened_at = timestamp(as_of)
         opened_date = datetime.fromisoformat(opened_at).astimezone(SHANGHAI).date()
         initial_cash = money(cash, "cash")
@@ -141,7 +153,7 @@ class Ledger:
             holdings[symbol] = (quantity(row["quantity"]), str(decimal(row["unit_cost"], "unit cost")),
                                 position_date.isoformat())
         remaining = {symbol: row[0] for symbol, row in holdings.items()}
-        account = tx.add("account", name=name(title), commission_rate=commission(rate),
+        account = tx.add("account", name=name(title), commission_rate=stock_rate, etf_commission_rate=etf_rate,
                          opened_at=opened_at, initial_cash=initial_cash, current={})
         for allocation in allocations:
             assigned = allocation["positions"]
@@ -172,12 +184,17 @@ class Ledger:
         with self.store.transaction() as tx:
             return tx.get("account", account_id) if account_id is not None else tx.find("account")
 
-    def edit_account(self, account_id, title=None, rate=None):
+    def edit_account(self, account_id, title=None, rate=None, *, stock_rate=None, etf_rate=None):
         changes = {}
         if title is not None:
             changes["name"] = name(title)
         if rate is not None:
             changes["commission_rate"] = commission(rate)
+            changes["etf_commission_rate"] = commission(rate)
+        if stock_rate is not None:
+            changes["commission_rate"] = commission(stock_rate)
+        if etf_rate is not None:
+            changes["etf_commission_rate"] = commission(etf_rate)
         with self.store.transaction(write=True) as tx:
             return tx.update("account", account_id, **changes)
 
@@ -288,8 +305,9 @@ class Ledger:
         account = tx.get("account", run["account_id"])
         effective_at = self._trade_time(account, run, effective_at)
         instrument = self._instrument(tx, security, capture=True)
+        rate = account["etf_commission_rate"] if instrument["kind"] == "etf" else account["commission_rate"]
         details = self._trade_details(instrument, side, count, price, effective_at,
-                                      account["commission_rate"], overrides or {})
+                                      rate, overrides or {})
         event = self._event(tx, account["id"], "trade", effective_at, run_id=run_id)
         trade = tx.add("trade", id=event["id"], run_id=run_id, reason=reason, note=note, **details)
         rebuild(tx, account["id"])
@@ -305,6 +323,10 @@ class Ledger:
             effective_at = self._trade_time(account, run, changes.get("effective_at", event["effective_at"]),
                                             existing_at=event["effective_at"])
             instrument = self._instrument(tx, changes.get("security", trade["symbol"]), capture=True)
+            previous_kind = tx.get("instrument", previous_symbol)["kind"]
+            rate = trade["commission_rate"]
+            if instrument["kind"] != previous_kind:
+                rate = account["etf_commission_rate"] if instrument["kind"] == "etf" else account["commission_rate"]
             details = {}
             if changes.keys() & {"effective_at", "security", "side", "quantity", "price", "overrides"}:
                 overrides = {**trade["overrides"], **changes.get("overrides", {})}
@@ -312,7 +334,7 @@ class Ledger:
                 details = self._trade_details(instrument, changes.get("side", trade["side"]),
                                               changes.get("quantity", trade["quantity"]),
                                               changes.get("price", trade["price"]), effective_at,
-                                              trade["commission_rate"], overrides)
+                                              rate, overrides)
             trade = tx.update("trade", trade_id, **details, reason=changes.get("reason", trade["reason"]),
                               note=changes.get("note", trade["note"]))
             event = tx.update("ledger_event", trade_id, effective_at=effective_at)

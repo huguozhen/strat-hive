@@ -2,9 +2,17 @@
 
 现金、价格和费率可使用十进制字符串，数量使用整数。运行及成交时间使用 ISO 格式，未标明时区时按北京时间处理。业务命令默认返回 JSON。带持仓建账、成交录入和结束运行使用 `--request-id` 标识一次写入，恢复结果时使用相同 ID 和输入。
 
+## 佣金费率
+
+`account open` 和 `account edit` 支持 `--stock-commission-rate` 和 `--etf-commission-rate`，例如股票 `0.0003`、ETF `0.0001`。只修改其中一类时，传入该类参数即可。
+
+`--commission-rate` 继续统一设置两类费率，分类参数优先。建账时须提供股票费率或统一费率，ETF 费率省略时沿用统一费率，若仅提供股票费率则与股票相同。旧账本执行 `db init` 升级后，两类费率均继承原值。
+
+账户查询中的 `commission_rate` 表示股票费率，`etf_commission_rate` 表示 ETF 费率。成交自动按证券品种选择费率并保存，后续修改账户费率后，更正原成交价量仍使用原成交费率。跨品种更正证券时使用账户当前对应品种的费率。
+
 ## 期初持仓
 
-`account open --name NAME --cash CASH --commission-rate RATE --as-of TIME --opening FILE` 在建账截止时点创建并启动承接运行。每只证券分配数量之和须等于账户持仓数量，所有运行分配现金之和须在账户期初现金范围内。先创建策略，并在各分配项填写 `strategy_id`。可用正整数 `version` 指定已有版本，省略时在建账事务内绑定当时的最新版。可为承接持仓提供期初估值，缺少估值时相关绩效待估值。
+`account open --name NAME --cash CASH --stock-commission-rate STOCK_RATE --etf-commission-rate ETF_RATE --as-of TIME --opening FILE` 在建账截止时点创建并启动承接运行。每只证券分配数量之和须等于账户持仓数量，所有运行分配现金之和须在账户期初现金范围内。先创建策略，并在各分配项填写 `strategy_id`。可用正整数 `version` 指定已有版本，省略时在建账事务内绑定当时的最新版。可为承接持仓提供期初估值，缺少估值时相关绩效待估值。
 
 ```json
 {
