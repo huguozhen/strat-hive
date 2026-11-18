@@ -18,7 +18,8 @@ instruments = table("instrument", Column("symbol", String, primary_key=True),
 strategies = table("strategy", key("id", primary_key=True), value("name"), value("description"))
 
 accounts = table("account", key("id", primary_key=True), value("name"), value("commission_rate"),
-                 value("opened_at"), value("initial_cash", Integer), value("current", JSON))
+                 value("etf_commission_rate"), value("opened_at"), value("initial_cash", Integer),
+                 value("current", JSON))
 
 versions = table("strategy_version", key("id", primary_key=True), key("strategy_id", "strategy.id"),
                  value("number", Integer), value("created_at"), value("name"), value("description"),

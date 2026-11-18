@@ -27,9 +27,10 @@ def test_split_legacy_catalog_and_restore_without_cache(tmp_path, monkeypatch):
     ledger.open_account("账户", "1000", "0.0003", CUTOFF, holdings(), [allocation(strategy, "原运行", 100, "10")])
     ledger.record_trade(1, "SH.600000", "sell", 10, "10", FIRST, request_id="legacy-sell")
 
-    # 0002 与 0003 的表结构相同，旧库还含有未被任何业务事实引用的目录条目。
+    # 模拟 0002 结构及未被业务事实引用的旧目录条目。
     revision = table("alembic_version", column("version_num"))
     with store.engine.begin() as connection:
+        connection.exec_driver_sql("ALTER TABLE account DROP COLUMN etf_commission_rate")
         connection.execute(revision.update().values(version_num="0002"))
         connection.execute(instruments.insert(), [CATALOG[1]])
     catalog_file_path = ledger.store.catalog.path

@@ -174,7 +174,7 @@ class SQLiteStore:
                         after = rebuild(tx, account["id"])["current"]
                         require(all(before[field] == after[field] for field in ("cash", "unallocated_cash", "positions")),
                                 "migration changed account assets", "migration_conflict")
-                        if previous == "0002":
+                        if previous in {"0002", "0003"}:
                             require(before["runs"] == after["runs"], "migration changed run assets", "migration_conflict")
                         run_ids = self.migrations.attributes.get("legacy_run_ids", {})
                         for old_id, old_assets in before.get("pools", {}).items():

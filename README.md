@@ -38,6 +38,8 @@ strathive --help
 
 随后可以让 Agent 记录实际成交、查询运行持仓或导入券商快照对账。结束运行时，先告知 Agent 剩余证券是已经卖出，还是要交给同一账户的新运行。关键写入由 Agent 确认所需输入并依据 CLI 结果反馈。
 
+建账或修改账户时可分别提供股票、ETF 佣金费率，例如股票 0.03%、ETF 0.01%。CLI 使用 `--stock-commission-rate 0.0003 --etf-commission-rate 0.0001`，也可在 `account edit` 中单独修改其中一类。
+
 ## CLI 契约与排障
 
 CLI 面向 Agent 和自动化调用。业务命令默认返回 JSON，命令参数用 `--help` 查看。CLI 默认使用向导选定的账本，全局 `--db PATH` 可覆盖单次操作。下列接口和 [结构化输入示例](skills/strathive-ledger/references/inputs.md) 描述本版设计，排障时以安装版本的帮助为准。

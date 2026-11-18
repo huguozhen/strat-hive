@@ -123,3 +123,69 @@ def test_fee_schedule_and_override():
     assert actual == {**computed, "commission": 25}
     with pytest.raises(LedgerError, match="outside the built-in schedule"):
         fees_for("stock", "sell", "2022-01-01T01:00:00+00:00", Decimal("10000"), Decimal(0), {})
+
+
+def test_separate_rates_and_historical_trade_fees(ledger):
+    account = ledger.open_account("分类费率", "1000000", as_of=CUTOFF,
+                                  stock_rate="0.0003", etf_rate="0.0001", request_id="rates")
+    assert ledger.open_account("分类费率", "1000000", as_of=CUTOFF,
+                               stock_rate="0.0003", etf_rate="0.0001", request_id="rates") == account
+    strategy = ledger.create_strategy("交易")
+    run = ledger.create_run(strategy["id"], account["id"], "运行")
+    ledger.start_run(run["id"], "1000000", FIRST)
+    stock = ledger.record_trade(run["id"], "600000", "buy", 10000, "10", FIRST)
+    etf = ledger.record_trade(run["id"], "159915", "buy", 10000, "10", FIRST)
+    assert stock["fees"]["commission"] == "30.00"
+    assert etf["fees"]["commission"] == "10.00"
+    ledger.edit_account(account["id"], stock_rate="0.0004", etf_rate="0.0002")
+    assert ledger.trade(stock["id"]) == stock
+    assert ledger.trade(etf["id"]) == etf
+    assert ledger.edit_trade(stock["id"], {"price": "11"})["fees"]["commission"] == "33.00"
+    assert ledger.edit_trade(etf["id"], {"price": "11"})["fees"]["commission"] == "11.00"
+    stock_sale = ledger.record_trade(run["id"], "600000", "sell", 10000, "10", SECOND)
+    etf_sale = ledger.record_trade(run["id"], "159915", "sell", 10000, "10", SECOND)
+    assert stock_sale["fees"]["commission"] == "40.00"
+    assert etf_sale["fees"]["commission"] == "20.00"
+    overridden = ledger.edit_trade(etf_sale["id"], {"overrides": {"commission": "1.25"}})
+    assert overridden["fees"]["commission"] == "1.25"
+    assert overridden["calculated"]["commission"] == "20.00"
+    assert ledger.edit_trade(etf_sale["id"], {"overrides": {"commission": None}})["fees"]["commission"] == "20.00"
+
+
+@pytest.mark.parametrize(("security", "correction", "expected"), [
+    ("600000", "159915", "10.00"),
+    ("159915", "600000", "30.00"),
+])
+def test_correct_security_kind_selects_matching_rate(ledger, security, correction, expected):
+    account = ledger.open_account("更正品种", "1000000", as_of=CUTOFF,
+                                  stock_rate="0.0003", etf_rate="0.0001")
+    strategy = ledger.create_strategy("交易")
+    run = ledger.create_run(strategy["id"], account["id"], "运行")
+    ledger.start_run(run["id"], "1000000", FIRST)
+    trade = ledger.record_trade(run["id"], security, "buy", 10000, "10", FIRST)
+    corrected = ledger.edit_trade(trade["id"], {"security": correction})
+    assert corrected["fees"]["commission"] == expected
+
+
+@pytest.mark.parametrize("field", ["stock_rate", "etf_rate"])
+@pytest.mark.parametrize("invalid", ["-0.0001", "0.004", "NaN", "abc"])
+def test_invalid_commission_rate_is_atomic(ledger, field, invalid):
+    with pytest.raises(LedgerError):
+        ledger.open_account("无效费率", "1000", "0.0003", CUTOFF, **{field: invalid})
+    assert ledger.accounts() == []
+    account = ledger.open_account("原账户", "1000", "0.0003", CUTOFF)
+    with pytest.raises(LedgerError):
+        ledger.edit_account(account["id"], title="无效修改", **{field: invalid})
+    assert ledger.accounts(account["id"]) == account
+
+
+def test_uniform_rate_fallback_and_zero_rates(ledger):
+    account = ledger.open_account("统一费率", "1000", "0.0003", CUTOFF)
+    assert account["commission_rate"] == account["etf_commission_rate"] == "0.0003"
+    account = ledger.edit_account(account["id"], "零费率", "0")
+    assert account["commission_rate"] == account["etf_commission_rate"] == "0"
+    account = ledger.open_account("仅股票费率", "1000", as_of=CUTOFF, stock_rate="0.0002")
+    assert account["commission_rate"] == account["etf_commission_rate"] == "0.0002"
+    account = ledger.open_account("分类优先", "1000", "0.0003", CUTOFF, stock_rate="0.0004", etf_rate="0")
+    assert account["commission_rate"] == "0.0004"
+    assert account["etf_commission_rate"] == "0"
