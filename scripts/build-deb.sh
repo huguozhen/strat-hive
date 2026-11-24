@@ -35,6 +35,9 @@ find "$runtime/bin" -maxdepth 1 -type f ! -name python3.14 -delete
 find "$runtime/bin" -xtype l -delete
 rm -rf "$target/bin"
 cp -r skills/strathive-ledger "$stage/usr/share/strathive/skills/"
+for history_file in install.py requirements.lock build-requirements.lock; do
+    install -Dm644 "scripts/history/$history_file" "$stage/usr/share/strathive/history/$history_file"
+done
 install -Dm644 README.md "$stage/usr/share/doc/strathive/README.md"
 
 cat > "$stage/usr/bin/strathive" <<'LAUNCHER'

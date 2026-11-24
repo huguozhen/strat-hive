@@ -1,0 +1,7 @@
+[Unit]
+Description=StratHive retry unfinished historical batches
+
+[Service]
+Type=oneshot
+ExecStart=@COMMAND@ data sync --retry-only
+TimeoutStartSec=6h

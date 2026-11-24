@@ -21,8 +21,8 @@ def invoke(db, *args):
 
 def test_cli_packaging_inputs_and_concurrency(tmp_path):
     db = tmp_path / "ledger.db"
-    assert invoke(db, "db", "init")["revision"] == "0004"
-    assert invoke(db, "db", "init")["revision"] == "0004"
+    assert invoke(db, "db", "init")["revision"] == "0005"
+    assert invoke(db, "db", "init")["revision"] == "0005"
     assert invoke(db, "security", "lookup", "000001")["market"] == "SZ"
     assert invoke(db, "security", "lookup", "SH.510300")["kind"] == "etf"
     account = invoke(db, "account", "open", "--name", "test", "--cash", "100", "--commission-rate", "0.0003",

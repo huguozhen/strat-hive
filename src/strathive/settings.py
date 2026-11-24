@@ -46,3 +46,7 @@ def save(values):
         os.replace(temporary, directory / "settings.json")
     finally:
         Path(temporary).unlink(missing_ok=True)
+
+
+def market_path():
+    return user_cache_path(APP) / "market" / "prices.sqlite3"

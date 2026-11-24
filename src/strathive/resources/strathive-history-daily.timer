@@ -1,0 +1,10 @@
+[Unit]
+Description=StratHive historical daily update at 18:00 Beijing
+
+[Timer]
+OnCalendar=*-*-* 18:00:00 Asia/Shanghai
+Persistent=true
+Unit=strathive-history-daily.service
+
+[Install]
+WantedBy=timers.target

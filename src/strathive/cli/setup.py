@@ -128,7 +128,12 @@ def run(catalog):
             except LedgerError as exc:
                 typer.echo(str(exc), err=True)
                 continue
-            settings.save({"ledger": values["ledger"], **config})
+            from strathive.data.service import configuration
+            updated = configuration({**values, **config})
+            updated["providers"][config["source"]] = {"connection": config.get("connection", {})}
+            updated["selection"]["reference"] = [config["source"]]
+            settings.save(updated)
+            typer.echo("行情可另行配置：strathive data configure；查看状态：strathive data status。")
             typer.echo(f"同步完成，共更新 {result['count']} 条证券记录。")
             if result["conflicts"]:
                 typer.echo(f"保留了 {len(result['conflicts'])} 条品种冲突记录的原值。")

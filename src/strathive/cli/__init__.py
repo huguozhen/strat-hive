@@ -78,7 +78,20 @@ groups["strategy"].add_typer(version_app, name="version")
 
 class Session:
     def __init__(self, db):
-        self.ledger, self.store = build(db)
+        self.db = db
+        self._built = None
+
+    @property
+    def ledger(self):
+        if self._built is None:
+            self._built = build(self.db)
+        return self._built[0]
+
+    @property
+    def store(self):
+        if self._built is None:
+            self._built = build(self.db)
+        return self._built[1]
 
 
 def output(value):
@@ -134,7 +147,8 @@ def sync_security(ctx: typer.Context, if_stale: bool = typer.Option(False, help=
 
 @groups["security"].command("sync-status", help="查询当前来源的最近一次尝试和成功记录。")
 def security_status(ctx: typer.Context):
-    source = settings.settings().get("source")
+    values = settings.settings()
+    source = (values.get("selection", {}).get("reference") or [values.get("source")])[0]
     require(source in SOURCE_NAMES, "请先运行 strathive setup 配置数据源。", "source_not_configured")
     output(ctx.obj.store.catalog.status(source))
 
@@ -331,6 +345,9 @@ def reconcile(ctx: typer.Context, account_id: AccountId,
             positions.append(dict(zip(("security", "quantity", "unit_cost"), fields)))
     output(ctx.obj.ledger.reconcile(account_id, cash, positions, cost_basis))
 
+
+from .market import install
+install(app, output)
 
 def main():
     args = sys.argv[1:]

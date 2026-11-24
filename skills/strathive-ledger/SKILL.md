@@ -1,6 +1,6 @@
 ---
 name: strathive-ledger
-description: Use the local StratHive CLI to open broker-backed asset accounts, manage strategy versions, start or close strategy runs, hand off holdings, record executed trades, and reconcile broker snapshots.
+description: Use the local StratHive CLI to open broker-backed asset accounts, manage strategy versions, start or close strategy runs, hand off holdings, record executed trades, reconcile broker snapshots, and query market-backed account or run valuations.
 ---
 
 1. Use command-level `--help` to verify the installed CLI supports the requested workflow. If a required command or option is missing, report the version mismatch and stop that operation.
@@ -10,6 +10,7 @@ description: Use the local StratHive CLI to open broker-backed asset accounts, m
    - **Open or start**: Identify the asset account and confirm the starting cash and time. For existing holdings, use the [opening format](references/inputs.md#期初持仓) and allocate the full declared quantity. Starting cash is fixed at the run boundary.
    - **Set commissions**: When opening an account or changing its rates, use the [commission settings](references/inputs.md#佣金费率) to apply the user's stock and ETF rates separately.
    - **Record or correct**: Enter executed trades and actual fee overrides supplied by the user. Before deleting a trade, show the identified record and obtain authorization.
-   - **Close or hand off**: Confirm the source run and intended close time. For a handoff, identify the draft successor in the same account and confirm its starting cash. Use the [handoff format](references/inputs.md#结束与持仓交接) if the user supplies a valuation.
+   - **Close or hand off**: Confirm the source run and intended close time. For a handoff, identify the draft successor in the same account and confirm its starting cash. The CLI calculates boundary values automatically; report the returned price date and any unpriced holdings.
+   - **Value assets**: Use `valuation account --account-id ID` or `valuation run --run-id ID`. Follow [valuation guidance](references/inputs.md#自动取价与估值) for refresh, offline mode, degraded quotes and completing missing boundary values. A missing total is unknown, not zero.
    - **Reconcile**: Use the [broker snapshot format](references/inputs.md#对账-csv). Report cash and quantity differences separately from incomparable costs. Select a cost basis only when the user confirms it matches.
 4. Report a write as committed when the CLI returns `ok: true`. For opening with holdings, recording a trade, and closing or handing off a run, pass a unique `--request-id`. If the outcome is unknown, reuse that ID with identical inputs to recover the result. If request recovery is unavailable, query the ledger before deciding what to do next.

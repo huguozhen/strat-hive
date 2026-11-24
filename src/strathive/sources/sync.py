@@ -15,8 +15,8 @@ SOURCE_NAMES = {"galaxy": "银河星耀数智", "public": "公开证券目录"}
 WORKER = Path(__file__).with_name("worker.py")
 
 
-def request(source, action, connection=None, *, python=None, timeout=115, previous_stocks=()):
-    task = {"source": source, "action": action, "connection": connection, "previous_stocks": previous_stocks}
+def request(source, action, connection=None, *, python=None, timeout=115, previous_stocks=(), symbols=(), session_date=None):
+    task = {"source": source, "action": action, "connection": connection, "previous_stocks": previous_stocks, "symbols": symbols, "session_date": session_date}
     with tempfile.TemporaryDirectory(prefix="strathive-source-") as directory:
         result = Path(directory) / "result.json"
         try:
@@ -54,7 +54,8 @@ def validate_catalog(rows):
 
 def synchronize(catalog, config, *, if_stale=False):
     """调用方持有刷新锁，成功状态与新目录在同一事务提交。"""
-    source = config.get("source")
+    source = (config.get("selection", {}).get("reference") or [config.get("source")])[0]
+    config = {**config, "connection": config.get("providers", {}).get(source, {}).get("connection", config.get("connection"))}
     require(source in SOURCE_NAMES, "请先运行 strathive setup 配置数据源。", "source_not_configured")
     now = datetime.now(timezone.utc)
     status = catalog.status(source)
