@@ -27,12 +27,12 @@ def systemd_quote(value, *, command_arg=False):
     return json.dumps(value, ensure_ascii=False)
 
 
-def enable():
+def enable(task=TASK):
     directory = user_config_path("systemd") / "user"
     try:
         directory.mkdir(parents=True, exist_ok=True)
         for extension in ("service", "timer"):
-            filename = f"{TASK}.{extension}"
+            filename = f"{task}.{extension}"
             content = (RESOURCES / filename).read_text(encoding="utf-8")
             if extension == "service":
                 content = content.replace("@COMMAND@", " ".join(systemd_quote(arg, command_arg=True) for arg in command()))
@@ -40,7 +40,7 @@ def enable():
                     if name in os.environ:
                         content += f"Environment={systemd_quote(f'{name}={os.environ[name]}')}\n"
             (directory / filename).write_text(content, encoding="utf-8")
-        for args in (["daemon-reload"], ["enable", "--now", f"{TASK}.timer"]):
+        for args in (["daemon-reload"], ["enable", "--now", f"{task}.timer"]):
             subprocess.run(["systemctl", "--user", *args], capture_output=True, check=True, timeout=15)
     except (OSError, subprocess.SubprocessError):
         return False

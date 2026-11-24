@@ -7,6 +7,7 @@ from strathive.core.rules import SHANGHAI, LedgerError, require
 from .cache import PriceCache
 from .models import Price, utcnow
 from .providers.galaxy import Galaxy
+from .history.provider import History
 
 
 def configuration(values):
@@ -28,10 +29,12 @@ class Data:
             name: Galaxy(value.get("connection", {}))
             for name, value in self.config.get("providers", {}).items() if name == "galaxy"
         }
+        if providers is None and "history" in self.config:
+            self.providers["cnequity"] = History(self.config["history"])
 
     def status(self):
         return {"selection": self.config.get("selection", {}),
-                "providers": list(self.providers), "cache": str(self.cache.path)}
+                "providers": list(self.providers), "cache": str(self.cache.path), "history": History().status()}
 
     def instruments(self, query):
         from strathive.core.ledger import resolve
@@ -82,7 +85,8 @@ class Data:
                             raise ValueError("future session")
                         if session_date and price.session_date != session_date:
                             raise ValueError("wrong session")
-                        self.cache.put(price)
+                        if name != "cnequity":
+                            self.cache.put(price)
                         if capability == "quote" and price.as_of and (self.clock() - datetime.fromisoformat(price.as_of)).total_seconds() > 300:
                             continue
                         found[price.symbol] = price
@@ -118,6 +122,7 @@ class Data:
         if not offline:
             fetched, errors = self._fetch("quote", set(symbols) - prices.keys())
             prices.update(fetched)
+        close_fallback = {}
         missing = {s for s in symbols if s not in prices and not self.cache.find(s, "last")}
         # Explicitly fetch the most recent completed close only if no snapshot is available.
         if missing and not offline:
@@ -131,7 +136,7 @@ class Data:
                 except (LedgerError, ValueError):
                     pass
             if target:
-                self.close_prices(missing, target)
+                close_fallback = self.close_prices(missing, target)["prices"]
         result = {}
         for symbol in symbols:
             p = prices.get(symbol)
@@ -139,6 +144,8 @@ class Data:
                 candidates = self.cache.find(symbol, "last") or self.cache.find(symbol, "close")
                 if candidates:
                     p = max(candidates, key=lambda p: p.as_of or p.session_date)
+            if p is None and symbol in close_fallback:
+                p = Price(**close_fallback[symbol])
             if p is None:
                 continue
             age = (now - datetime.fromisoformat(p.as_of)).total_seconds() if p.as_of else None

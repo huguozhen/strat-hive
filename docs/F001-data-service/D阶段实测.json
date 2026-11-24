@@ -1,0 +1,315 @@
+{
+  "version": "0.25.0",
+  "commit": "dd6881ad7a3e8fce4ed4314711c99f6251ec06f8",
+  "measured_at": "2026-11-24T14:12:48.820589+00:00",
+  "datasets": {
+    "daily_bars": {
+      "active_parquet_files": 37,
+      "active_parquet_bytes": 153899,
+      "rows": 2904,
+      "first": "2023-11-24",
+      "last": "2026-11-24"
+    },
+    "minute_bars": {
+      "active_parquet_files": 60,
+      "active_parquet_bytes": 1040624,
+      "rows": 57600,
+      "first": "2026-08-25",
+      "last": "2026-11-24"
+    },
+    "adj_factors": {
+      "active_parquet_files": 37,
+      "active_parquet_bytes": 65478,
+      "rows": 2904,
+      "first": "2023-11-24",
+      "last": "2026-11-24"
+    }
+  },
+  "all_parquet_bytes": 2938226,
+  "environment_bytes": 708759251,
+  "extensions_bytes": 107316270,
+  "packages": {
+    "PyYAML": "6.0.3",
+    "sniffio": "1.3.1",
+    "typing_extensions": "4.16.0",
+    "markdown-it-py": "4.2.0",
+    "openpyxl": "3.1.5",
+    "snownlp": "0.12.3",
+    "typing-inspection": "0.4.2",
+    "baostock": "0.9.3",
+    "click": "8.4.2",
+    "pyarrow": "25.0.0",
+    "pypdf": "6.19.0",
+    "starlette": "1.3.1",
+    "cnequity": "0.25.0",
+    "annotated-types": "0.8.0",
+    "polars-runtime-32": "1.42.1",
+    "fastapi": "0.141.1",
+    "idna": "3.18",
+    "cryptography": "50.0.2",
+    "rich": "15.0.0",
+    "annotated-doc": "0.0.5",
+    "curl_cffi": "0.15.0",
+    "six": "1.17.0",
+    "mdurl": "0.1.2",
+    "wheel": "0.47.0",
+    "anyio": "4.14.1",
+    "httpx": "0.25.2",
+    "setuptools": "84.2.1",
+    "pydantic_core": "2.46.4",
+    "pycparser": "3.0",
+    "et_xmlfile": "2.0.0",
+    "xlrd": "2.0.2",
+    "python-dateutil": "2.9.0.post0",
+    "polars": "1.42.1",
+    "cffi": "2.1.0",
+    "pydantic": "2.13.4",
+    "duckdb": "2.0.0",
+    "pandas": "3.0.3",
+    "Pygments": "2.20.0",
+    "h11": "0.16.0",
+    "certifi": "2026.6.17",
+    "uvicorn": "0.52.1",
+    "numpy": "2.5.1",
+    "packaging": "26.3",
+    "httpcore": "1.0.9"
+  },
+  "host": {
+    "cpu_cores": 4,
+    "memory_bytes": 8326938624,
+    "platform": "Linux x86_64"
+  },
+  "small_live_sample": {
+    "started_at": "2026-11-24T14:01:28.984113+00:00",
+    "elapsed_seconds": 93.27722511603497,
+    "lake_bytes": 863106,
+    "environment_bytes": 696122789,
+    "child_max_rss_kib": 304432
+  },
+  "small_scope": {
+    "symbols": [
+      "SH.600519",
+      "SZ.000001",
+      "SH.510300",
+      "SZ.159915"
+    ],
+    "start": "2026-11-09",
+    "end": "2026-11-23",
+    "daily_rows": 44,
+    "minute_rows": 10560,
+    "factor_rows": 44,
+    "complete": true
+  },
+  "three_year_and_60_session_resume": {
+    "started_at": "2026-11-24T14:08:43.089569+00:00",
+    "before_bytes": 2363852,
+    "elapsed_seconds": 66.18109355703928,
+    "after_bytes": 3856669,
+    "child_max_rss_kib": 372908
+  },
+  "resumed_batches": [
+    {
+      "id": "5913c27886df4e5fa2ee59779fcd8b04",
+      "dataset": "daily_bars",
+      "symbol": "SH.510300",
+      "start": "2026-11-18",
+      "end": "2026-11-24",
+      "status": "complete",
+      "rows_received": 5,
+      "revision": 23,
+      "gaps": [],
+      "source_window_trading_days": null
+    },
+    {
+      "id": "0598c804dcf74aff89f45622480cd47e",
+      "dataset": "daily_bars",
+      "symbol": "SH.600519",
+      "start": "2026-11-18",
+      "end": "2026-11-24",
+      "status": "complete",
+      "rows_received": 5,
+      "revision": 23,
+      "gaps": [],
+      "source_window_trading_days": null
+    },
+    {
+      "id": "89717ec856e04a898659b0b18f7934db",
+      "dataset": "daily_bars",
+      "symbol": "SZ.000001",
+      "start": "2026-11-18",
+      "end": "2026-11-24",
+      "status": "complete",
+      "rows_received": 5,
+      "revision": 23,
+      "gaps": [],
+      "source_window_trading_days": null
+    },
+    {
+      "id": "8fa7addcf9b04e23910b69ffd64fae89",
+      "dataset": "daily_bars",
+      "symbol": "SZ.159915",
+      "start": "2026-11-18",
+      "end": "2026-11-24",
+      "status": "complete",
+      "rows_received": 5,
+      "revision": 23,
+      "gaps": [],
+      "source_window_trading_days": null
+    },
+    {
+      "id": "43c8ef48fa5c4538b374364b7292a935",
+      "dataset": "minute_bars",
+      "symbol": "SH.510300",
+      "start": "2026-08-25",
+      "end": "2026-11-24",
+      "status": "complete",
+      "rows_received": 14400,
+      "revision": 24,
+      "gaps": [],
+      "source_window_trading_days": 95
+    },
+    {
+      "id": "ca3770dacc9c497f90d02940e32cb6fc",
+      "dataset": "minute_bars",
+      "symbol": "SH.600519",
+      "start": "2026-08-25",
+      "end": "2026-11-24",
+      "status": "complete",
+      "rows_received": 14400,
+      "revision": 24,
+      "gaps": [],
+      "source_window_trading_days": 95
+    },
+    {
+      "id": "02d707f958a0479cab7347ca66cc94c0",
+      "dataset": "minute_bars",
+      "symbol": "SZ.000001",
+      "start": "2026-08-25",
+      "end": "2026-11-24",
+      "status": "complete",
+      "rows_received": 14400,
+      "revision": 24,
+      "gaps": [],
+      "source_window_trading_days": 95
+    },
+    {
+      "id": "55d2e363fdbb407790f901898f9d3354",
+      "dataset": "minute_bars",
+      "symbol": "SZ.159915",
+      "start": "2026-08-25",
+      "end": "2026-11-24",
+      "status": "complete",
+      "rows_received": 14400,
+      "revision": 24,
+      "gaps": [],
+      "source_window_trading_days": 95
+    },
+    {
+      "id": "dd857610eb6b45909ddc30d81c12b1a3",
+      "dataset": "adj_factors",
+      "symbol": "SH.510300",
+      "start": "2023-11-24",
+      "end": "2026-11-24",
+      "status": "complete",
+      "rows_received": 726,
+      "revision": 25,
+      "gaps": [],
+      "source_window_trading_days": null
+    },
+    {
+      "id": "b1a3937d8bc84cae89e2b9eeb2516807",
+      "dataset": "adj_factors",
+      "symbol": "SH.600519",
+      "start": "2023-11-24",
+      "end": "2026-11-24",
+      "status": "complete",
+      "rows_received": 726,
+      "revision": 25,
+      "gaps": [],
+      "source_window_trading_days": null
+    },
+    {
+      "id": "f8364b283c13468a97b77f78c9d40e49",
+      "dataset": "adj_factors",
+      "symbol": "SZ.000001",
+      "start": "2023-11-24",
+      "end": "2026-11-24",
+      "status": "complete",
+      "rows_received": 726,
+      "revision": 25,
+      "gaps": [],
+      "source_window_trading_days": null
+    },
+    {
+      "id": "f1e0e87355cc466dabe23f1bead0dd72",
+      "dataset": "adj_factors",
+      "symbol": "SZ.159915",
+      "start": "2023-11-24",
+      "end": "2026-11-24",
+      "status": "complete",
+      "rows_received": 726,
+      "revision": 25,
+      "gaps": [],
+      "source_window_trading_days": null
+    }
+  ],
+  "current_directory": {
+    "started_at": "2026-11-24T14:08:41.887672+00:00",
+    "symbols": 6966,
+    "by_kind": [
+      {
+        "asset_type": "stock",
+        "len": 5223
+      },
+      {
+        "asset_type": "etf",
+        "len": 1743
+      }
+    ],
+    "profiles": 1743,
+    "snapshot": 6,
+    "elapsed_seconds": 26.404790696920827,
+    "child_max_rss_kib": 463032,
+    "lake_bytes": 399771
+  },
+  "queries": {
+    "minute_export_rows": 57600,
+    "minute_export_complete": true,
+    "minute_export_snapshot": 25,
+    "large_result_error": "history_export_required",
+    "adjusted_quarter_rows": 52,
+    "historical_close_read": true
+  },
+  "notes": [
+    "Metadata/resource measurements only; no market bars copied into the repository.",
+    "Four-symbol expanded sync was interrupted during minute validation; completed daily publications were retained and the same request resumed.",
+    "Full-market directory was read; full-market three-year prices were not downloaded."
+  ],
+  "verification": {
+    "pytest_passed": 75,
+    "existing_typer_click_warnings": 2,
+    "debian_build": "passed_offline",
+    "package_smoke": [
+      "status",
+      "structured_missing_backend",
+      "isolated_historical_read",
+      "ledger_init",
+      "installer_files"
+    ],
+    "offline_storage_checks": [
+      "current_directory_union",
+      "batched_publication",
+      "decimal_storage",
+      "idempotent_upsert",
+      "raw_query",
+      "strict_adjustment",
+      "adjust_before_aggregation",
+      "minute_gaps",
+      "complete_export",
+      "retained_revision",
+      "vendor_daily_units"
+    ],
+    "core_heavy_dependencies_installed": false,
+    "docker_release_check": "not_run_docker_unavailable"
+  }
+}

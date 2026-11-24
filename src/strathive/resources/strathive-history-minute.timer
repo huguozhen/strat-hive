@@ -1,0 +1,10 @@
+[Unit]
+Description=StratHive watchlist minute update at 18:15 Beijing
+
+[Timer]
+OnCalendar=*-*-* 18:15:00 Asia/Shanghai
+Persistent=true
+Unit=strathive-history-minute.service
+
+[Install]
+WantedBy=timers.target

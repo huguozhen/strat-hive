@@ -9,6 +9,8 @@ def install(app, output):
     data = typer.Typer(help='行情、来源及诊断。', no_args_is_help=True)
     valuation = typer.Typer(help='账户和运行的参考市值。', no_args_is_help=True)
     app.add_typer(data, name='data')
+    from .history import install as install_history
+    install_history(data, output)
     app.add_typer(valuation, name='valuation')
 
     @data.command('status')

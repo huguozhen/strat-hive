@@ -79,3 +79,5 @@ strathive valuation run --run-id 1 --offline
 默认报价缓存约 60 秒，`--refresh` 跳过短缓存，`--offline` 禁止联网。结果保留价格时间、来源和降级说明；完整缺价的持仓不会按零值或成本计入总资产。行情 SDK 只在有界子进程中运行，不需要行情守护进程。
 
 带持仓建账、持仓交接会按生效日期自动获取收盘价并回显；行情不可用时事实仍可入账，市值标为待估值。配置恢复后可用 `strathive valuation complete --run-id 1` 补齐空缺计量，已保存价格保持原值。期初及交接价格随账本备份，不依赖行情缓存恢复。
+
+历史行情另见 [F001 阶段 D](docs/F001-data-service/D阶段历史数据.md)：独立安装 CNEquity 0.25.0，使用 `data bars`、`data sync` 和 `data history` 命令。未安装历史后端时仍可使用账本。

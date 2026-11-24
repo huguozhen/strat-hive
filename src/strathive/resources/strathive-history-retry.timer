@@ -1,0 +1,10 @@
+[Unit]
+Description=StratHive historical retry at 20:00 Beijing
+
+[Timer]
+OnCalendar=*-*-* 20:00:00 Asia/Shanghai
+Persistent=true
+Unit=strathive-history-retry.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,7 @@
+[Unit]
+Description=StratHive daily historical prices and factors
+
+[Service]
+Type=oneshot
+ExecStart=@COMMAND@ data sync --period 1d --scheduled
+TimeoutStartSec=6h

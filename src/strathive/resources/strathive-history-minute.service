@@ -1,0 +1,7 @@
+[Unit]
+Description=StratHive watchlist minute prices and factors
+
+[Service]
+Type=oneshot
+ExecStart=@COMMAND@ data sync --period 1m --scheduled
+TimeoutStartSec=6h
