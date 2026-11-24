@@ -6,11 +6,11 @@ import json
 from .rules import require
 
 
-def recoverable_write(store, operation_id, operation, request_id, **inputs):
+def recoverable_write(store, operation_id, operation, request_id, context=None, **inputs):
     """相同请求返回原提交结果，失败事务不会留下回执。"""
     with store.transaction(write=True) as tx:
         if request_id is None:
-            return operation(tx, **inputs)
+            return operation(tx, **inputs, **(context or {}))
 
         require(isinstance(request_id, str) and bool(request_id.strip()) and len(request_id) <= 128,
                 "invalid request ID")
@@ -22,6 +22,6 @@ def recoverable_write(store, operation_id, operation, request_id, **inputs):
                     "request ID was already used for different input", "request_conflict")
             return previous[0]["result"]
 
-        result = operation(tx, **inputs)
+        result = operation(tx, **inputs, **(context or {}))
         tx.add("write_request", id=request_id, fingerprint=fingerprint, result=result)
         return result

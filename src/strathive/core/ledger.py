@@ -44,9 +44,10 @@ class Ledger:
 
     def __init__(self, store):
         self.store = store
+        self.references = []
 
     def instrument(self, security):
-        return resolve(self.store.catalog.find, security)
+        return resolve(lambda **filters: [r for r in self.references if all(r.get(k) == v for k, v in filters.items())], security)
 
     def _instrument(self, tx, security, *, capture=False):
         """账本优先使用已入账的证券身份，首次入账时保存独立快照。"""
@@ -54,7 +55,7 @@ class Ledger:
             local = tx.find("instrument", **filters)
             if local and "symbol" in filters:
                 return local
-            by_symbol = {row["symbol"]: row for row in self.store.catalog.find(**filters)}
+            by_symbol = {row["symbol"]: row for row in [r for r in self.references if all(r.get(k) == v for k, v in filters.items())]}
             by_symbol.update((row["symbol"], row) for row in local)
             return list(by_symbol.values())
 
@@ -129,7 +130,7 @@ class Ledger:
             inputs["etf_rate"] = etf_rate
         return recoverable_write(self.store, "account.open", self._open_account, request_id, **inputs)
 
-    def _open_account(self, tx, title, cash, rate, as_of, positions, allocations, stock_rate=None, etf_rate=None):
+    def _open_account(self, tx, title, cash, rate, as_of, positions, allocations, stock_rate=None, etf_rate=None, market_prices=None):
         stock_rate = stock_rate if stock_rate is not None else rate
         etf_rate = etf_rate if etf_rate is not None else rate
         require(stock_rate is not None, "stock commission rate is required")
@@ -172,9 +173,12 @@ class Ledger:
                 require(remaining.get(symbol, 0) >= count, "opening allocation exceeds account position")
                 remaining[symbol] -= count
                 _, unit_cost, position_date = holdings[symbol]
+                mark = (market_prices or {}).get(symbol) if row.get("valuation_price") is None else None
                 valuation = row.get("valuation_price")
+                if valuation is None and mark:
+                    valuation = mark["price"]
                 tx.add("opening_position", run_id=run["id"], symbol=symbol, quantity=count,
-                       position_date=position_date, unit_cost=unit_cost,
+                       position_date=position_date, unit_cost=unit_cost, valuation_meta=mark if valuation is not None else None,
                        valuation_price=None if valuation is None else str(decimal(valuation, "valuation price",
                                                                                  positive=True)))
         require(not any(remaining.values()), "all opening positions must be assigned to runs")
@@ -244,7 +248,7 @@ class Ledger:
                                  successor_run_id=successor_run_id, successor_cash=successor_cash,
                                  valuations=valuations)
 
-    def _close_run(self, tx, run_id, effective_at, successor_run_id, successor_cash, valuations):
+    def _close_run(self, tx, run_id, effective_at, successor_run_id, successor_cash, valuations, market_prices=None):
         run = tx.get("run", run_id)
         require(run["status"] in {"active", "paused"}, "only started runs can close", "ledger_conflict")
         account = tx.get("account", run["account_id"])
@@ -255,10 +259,12 @@ class Ledger:
                 "close is before a recorded run event", "ledger_conflict")
         cash = money(successor_cash, "successor cash")
         require(isinstance(valuations, (list, tuple)), "valuations must be an array")
-        marks = {}
+        marks = {symbol: {**p, "source": p["provider"]} for symbol, p in (market_prices or {}).items()}
+        supplied = set()
         for row in valuations:
             symbol = self._instrument(tx, row["security"])["symbol"]
-            require(symbol not in marks, f"duplicate valuation: {symbol}")
+            require(symbol not in supplied, f"duplicate valuation: {symbol}")
+            supplied.add(symbol)
             marks[symbol] = {"price": str(decimal(row["price"], "valuation price", positive=True)),
                              "source": name(row["source"], "valuation source")}
         if successor_run_id is not None:

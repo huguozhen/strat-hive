@@ -65,6 +65,7 @@ def test_existing_uniform_rates_and_requests_survive_upgrade(tmp_path):
     # 恢复为 0003 的账户结构及建账回执，验证真实升级和重试路径。
     with store.transaction(write=True) as tx:
         tx.update("write_request", "opening", result=original_receipt)
+        tx.connection.exec_driver_sql("ALTER TABLE opening_position DROP COLUMN valuation_meta")
         tx.connection.exec_driver_sql("ALTER TABLE account DROP COLUMN etf_commission_rate")
         tx.connection.exec_driver_sql("UPDATE alembic_version SET version_num = '0003'")
 

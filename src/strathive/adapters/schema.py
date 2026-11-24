@@ -32,7 +32,7 @@ runs = table("run", key("id", primary_key=True), key("strategy_version_id", "str
 
 opening = table("opening_position", key("id", primary_key=True), key("run_id", "run.id"),
                 value("symbol", ForeignKey("instrument.symbol")), value("quantity", Integer),
-                value("unit_cost"), value("position_date"), Column("valuation_price", String),
+                value("unit_cost"), value("position_date"), Column("valuation_price", String), Column("valuation_meta", JSON),
                 UniqueConstraint("run_id", "symbol"))
 
 events = table("ledger_event", key("id", primary_key=True), key("account_id", "account.id", index=True),

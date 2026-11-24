@@ -59,4 +59,23 @@ CLI 面向 Agent 和自动化调用。业务命令默认返回 JSON，命令参�
 
 离线证券目录记录来源和获取日期。深交所接口不可用时，深圳条目采用东方财富目录。可运行 `uv run python scripts/update-securities.py` 更新源码中的离线目录。
 
-维护者可运行 `./scripts/build-deb.sh` 构建 `.deb` 和 `SHA256SUMS`。推送与 `pyproject.toml` 版本一致的 `vX.Y.Z` 标签后，GitHub Actions 验证 Ubuntu 安装和包内运行时，再创建 Release 草稿供维护者核对发布。 [实施计划](docs/mvp/银河数据源与Linux发布实施计划.md)
+普通 PR 的 CI 运行 `uv run --locked pytest -q`，不构建安装包或启动 Docker。维护者可运行 `./scripts/build-deb.sh` 在本机构建 `.deb` 和 `SHA256SUMS`。
+
+推送与 `pyproject.toml` 版本一致的 `vX.Y.Z` 标签后，Linux release 工作流运行测试、构建安装包、验证 Ubuntu 安装和干净容器中的包内运行时，再创建 Release 草稿供维护者核对发布。也可在 GitHub Actions 中手动运行该工作流，提前验证并下载构建产物；手动运行不创建或更新 Release 草稿。 [实施计划](docs/mvp/银河数据源与Linux发布实施计划.md)
+
+## 盘中参考估值
+
+目录和行情可分别选择来源。已有银河连接可用以下命令选用银河行情；该命令保存选择，不代表已实连通过。`doctor --online` 验证日历，盘中 `quote --refresh` 验证实际报价。没有 SDK、账号或权限时，相关功能返回不可用或旧价降级，账本操作仍可使用。
+
+```sh
+strathive data configure --provider galaxy
+strathive data status
+strathive data doctor --online
+strathive data quote --security SH.600000 --security SZ.159915 --refresh
+strathive valuation account --account-id 1
+strathive valuation run --run-id 1 --offline
+```
+
+默认报价缓存约 60 秒，`--refresh` 跳过短缓存，`--offline` 禁止联网。结果保留价格时间、来源和降级说明；完整缺价的持仓不会按零值或成本计入总资产。行情 SDK 只在有界子进程中运行，不需要行情守护进程。
+
+带持仓建账、持仓交接会按生效日期自动获取收盘价并回显；行情不可用时事实仍可入账，市值标为待估值。配置恢复后可用 `strathive valuation complete --run-id 1` 补齐空缺计量，已保存价格保持原值。期初及交接价格随账本备份，不依赖行情缓存恢复。

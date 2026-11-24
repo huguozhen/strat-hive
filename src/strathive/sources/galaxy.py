@@ -115,3 +115,78 @@ def delisted_rows(info, stocks, previous_stocks):
         # 停用确认可在下次同步重试，未确认时保留原状态。
         return []
     return [{**missing[key], "active": False} for key in set(terminated) & missing.keys()]
+
+
+def market(config, action, symbols, session_date, result_path):
+    """Read only requested symbols. Subscription lifetime is bounded by the parent."""
+    import json
+    import os
+    import threading
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    ad = connect(config)
+    base = ad.BaseData()
+    if action == "calendar":
+        days = base.get_calendar(market=symbols[0])
+        ad.logout(config["username"])
+        return [datetime.strptime(''.join(c for c in str(day) if c.isdigit())[:8], "%Y%m%d").date().isoformat() for day in days]
+    codes = [f"{symbol.split('.')[1]}.{symbol.split('.')[0]}" for symbol in symbols]
+
+    def row(symbol, value, kind, at, day):
+        if isinstance(at, datetime):
+            if at.tzinfo is None:
+                from datetime import timedelta
+                at = at.replace(tzinfo=timezone(timedelta(hours=8)))
+            at = at.isoformat()
+        else:
+            at = None
+        return dict(symbol=symbol, price=str(value), kind=kind, provider="galaxy", as_of=at,
+                    session_date=day, retrieved_at=datetime.now(timezone.utc).isoformat())
+
+    if action == "close":
+        try:
+            calendar = base.get_calendar()
+            data = ad.MarketData(calendar).query_kline(codes, begin_date=int(session_date.replace('-', '')),
+                        end_date=int(session_date.replace('-', '')), period=ad.constant.Period.day.value)
+            rows = []
+            for symbol, code in zip(symbols, codes):
+                frame = data.get(code)
+                if frame is not None and not frame.empty:
+                    value = frame.iloc[-1]
+                    rows.append(row(symbol, value['close'], 'close', None, session_date))
+            return rows
+        finally:
+            ad.logout(config["username"])
+    found = {}
+    lock = threading.Lock()
+
+    def finish():
+        with lock:
+            Path(result_path).write_text(json.dumps({"data": list(found.values())}), encoding="utf-8")
+        os._exit(0)  # Terminates vendor's blocking subscription and native threads together.
+
+    timer = threading.Timer(12, finish)
+    timer.daemon = True
+    timer.start()
+    subscription = ad.SubscribeData()
+
+    @subscription.register(code_list=codes, period=ad.constant.Period.snapshot.value)
+    def snapshot(data, period):
+        code = data.code
+        if code not in codes:
+            return
+        symbol = symbols[codes.index(code)]
+        at = data.trade_time
+        with lock:
+            found[symbol] = row(symbol, data.last, 'last', at, at.date().isoformat())
+            complete = len(found) == len(symbols)
+        if complete:
+            finish()
+
+    try:
+        subscription.run()
+        return list(found.values())
+    finally:
+        timer.cancel()
+        ad.logout(config["username"])

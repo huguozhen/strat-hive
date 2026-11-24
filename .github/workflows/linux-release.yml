@@ -1,9 +1,9 @@
 name: Linux release
 
 on:
-  pull_request:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -30,6 +30,8 @@ jobs:
             useradd -m smoke
             runuser -u smoke -- sh -ec "
               printf \"2\\n\\n3\\n\" | strathive setup
+              strathive data status
+              strathive data quote --security SH.510300 --offline
               strathive db init
               strathive security lookup SH.510300
               strathive db backup --file /home/smoke/backup.sqlite3
@@ -45,7 +47,7 @@ jobs:
             dist/SHA256SUMS
 
   release-draft:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-24.04
     permissions:

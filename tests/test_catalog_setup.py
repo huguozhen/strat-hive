@@ -30,6 +30,7 @@ def test_split_legacy_catalog_and_restore_without_cache(tmp_path, monkeypatch):
     # 模拟 0002 结构及未被业务事实引用的旧目录条目。
     revision = table("alembic_version", column("version_num"))
     with store.engine.begin() as connection:
+        connection.exec_driver_sql("ALTER TABLE opening_position DROP COLUMN valuation_meta")
         connection.exec_driver_sql("ALTER TABLE account DROP COLUMN etf_commission_rate")
         connection.execute(revision.update().values(version_num="0002"))
         connection.execute(instruments.insert(), [CATALOG[1]])

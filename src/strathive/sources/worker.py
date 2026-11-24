@@ -17,6 +17,8 @@ def main():
                 result = True
             case "check":
                 result = galaxy.read(task["connection"], check_only=True)
+            case "quotes" | "close" | "calendar":
+                result = galaxy.market(task["connection"], task["action"], task.get("symbols", []), task.get("session_date"), sys.argv[1])
             case "fetch":
                 result = (galaxy.read(task["connection"], previous_stocks=task["previous_stocks"]) if task["source"] == "galaxy"
                           else public.fetch_catalog()[0])
