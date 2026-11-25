@@ -1,6 +1,7 @@
 # CNEquity 0.25.0 dd6881ad runtime dependencies, exported from its frozen uv.lock.
 # Source: https://github.com/rootSunc/CNEquity/blob/dd6881ad7a3e8fce4ed4314711c99f6251ec06f8/uv.lock
 # Validated with CPython 3.14.10 on Linux x86_64.
+annotated-doc==0.0.5 \
     --hash=sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101 \
     --hash=sha256:c7e58ce09192557605d8bbd92836d7e1d520ac9580096042c0bfd197efacf1bb
     # via fastapi

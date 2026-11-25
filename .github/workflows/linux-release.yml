@@ -17,26 +17,41 @@ jobs:
         with:
           version: '0.13.7'
       - run: uv run --locked pytest -q
+      - run: uv run --locked python scripts/history/build.py
       - run: ./scripts/build-deb.sh
       - name: Install on Ubuntu and smoke-test the bundled runtime
         run: |
           sudo dpkg --install dist/strathive_*_amd64.deb
           /usr/bin/strathive --help
+          component_bundle=$(python3 -c 'import json; print(json.load(open("dist/history-component.json"))["artifact"]["filename"])')
+          component_state=$(mktemp -d)
+          XDG_DATA_HOME="$component_state/data" XDG_CONFIG_HOME="$component_state/config" \
+            strathive data history install --bundle "$PWD/dist/$component_bundle"
+          XDG_DATA_HOME="$component_state/data" XDG_CONFIG_HOME="$component_state/config" \
+            strathive data history uninstall
           docker run --rm --network none -v "$PWD/dist:/release:ro" \
-            -v /usr/share/zoneinfo:/usr/share/zoneinfo:ro ubuntu:24.04 bash -euc '
+            -v /usr/share/zoneinfo:/usr/share/zoneinfo:ro \
+            -v "$HOME/.duckdb/extensions/v2.0.0/linux_amd64:/extensions:ro" ubuntu:24.04 bash -euc '
             if command -v python3 || command -v uv; then exit 1; fi
             dpkg-deb --extract /release/strathive_*_amd64.deb /
             if command -v python3 || command -v uv; then exit 1; fi
             useradd -m smoke
             runuser -u smoke -- sh -ec "
-              printf \"2\\n\\n3\\n\" | strathive setup
+              printf \"2\\n\\n3\\nn\\n\" | strathive setup
               strathive data status
               strathive data quote --security SH.510300 --offline
               strathive db init
               strathive security lookup SH.510300
               strathive db backup --file /home/smoke/backup.sqlite3
               strathive --db /home/smoke/restored.sqlite3 db restore --file /home/smoke/backup.sqlite3
-              test -f /usr/share/strathive/skills/strathive-ledger/SKILL.md
+              test -f /usr/share/strathive/skills/strathive/SKILL.md
+              export EQUITYLAKE_EXTENSION_DIR=/extensions
+              strathive data history install --bundle /release/strathive-history-*.tar.gz
+              strathive data history doctor
+              strathive data history uninstall
+              test -f /home/smoke/.local/share/strathive/history/lake/catalog.sqlite
+              strathive db backup --file /home/smoke/after-component.sqlite3
+              if command -v python3 || command -v uv || command -v git; then exit 1; fi
             "
           '
       - uses: actions/upload-artifact@v4
@@ -45,6 +60,8 @@ jobs:
           path: |
             dist/strathive_*_amd64.deb
             dist/SHA256SUMS
+            dist/strathive-history-*.tar.gz
+            dist/history-component.json
 
   release-draft:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')

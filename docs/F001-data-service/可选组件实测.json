@@ -1,0 +1,35 @@
+{
+  "passed": true,
+  "checks": [
+    "embedded_manifest",
+    "no_bundled_wheels",
+    "no_external_bootstrap_tools",
+    "packaged_install",
+    "isolated_runtime_versions",
+    "idempotent_install",
+    "uninstall_retains_history",
+    "ledger_without_component",
+    "reinstall_retains_history",
+    "retained_real_market_rows",
+    "renamed_skill"
+  ],
+  "bundle_bytes": 222188132,
+  "elapsed_seconds": 149.1011946250219,
+  "source_environment_lifecycle_seconds": 125.20292353397235,
+  "wheel_count": 41,
+  "core_package_bytes": 37171950,
+  "tests_passed": 91,
+  "docker_executed": false,
+  "release_published": false,
+  "console_entry_validation": {
+    "passed": true,
+    "checks": [
+      "stable_venv_path",
+      "pip_console",
+      "cne_console",
+      "isolated_doctor",
+      "uninstall"
+    ],
+    "elapsed_seconds": 55.034579006023705
+  }
+}

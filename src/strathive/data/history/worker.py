@@ -13,6 +13,7 @@ from strathive.core.rules import LedgerError, SHANGHAI, require
 from .bars import (NUMBERS, adjusted, aggregate, coverage, day, normalize, number,
                    period_bounds, symbol, vendor_symbol, window)
 from . import COMMIT
+from .bundle import RECEIPT
 from .sync import space, sync, writable, writer
 
 
@@ -29,6 +30,15 @@ def verify_version():
         result = subprocess.run(['git', '-C', str(checkout), 'rev-parse', 'HEAD'], capture_output=True, text=True)
         dirty = subprocess.run(['git', '-C', str(checkout), 'status', '--porcelain'], capture_output=True, text=True)
         actual = result.stdout.strip() if dirty.returncode == 0 and not dirty.stdout.strip() else None
+    if actual != COMMIT:
+        try:
+            receipt = json.loads((Path(sys.prefix) / RECEIPT).read_text())
+        except (OSError, ValueError):
+            receipt = {}
+        if (receipt.get('managed_by') == 'strathive' and receipt.get('component') == 'history'
+                and receipt.get('cnequity_version') == '0.25.0' and receipt.get('commit') == COMMIT
+                and len(receipt.get('artifact_sha256', '')) == 64):
+            actual = COMMIT
     require(actual == COMMIT, '历史后端源码提交与锁定版本不符，请重新安装。', 'history_version_mismatch')
     return {'version': package.version, 'commit': actual}
 
@@ -333,6 +343,25 @@ def export(target):
             Path(metadata_temp).unlink(missing_ok=True)
 
 
+def selftest(config):
+    """An installation check in a disposable lake; no live collection or user data."""
+    import polars as pl
+    with tempfile.TemporaryDirectory(prefix='strathive-history-check-') as temporary:
+        backend = Backend({**config, 'root': temporary, 'pause_gb': 0, 'warn_gb': 0}, create=True)
+        row = {'symbol': '510300.SH', 'trade_date': date(2026, 11, 23), 'open': '3.123456789123',
+               'high': '3.2', 'low': '3.1', 'close': '3.15', 'volume': 100, 'amount': '313.125',
+               'volume_unit': 'units', 'source': 'offline_fixture', 'data_version': 'v2',
+               'fetched_at': datetime.now(timezone.utc)}
+        backend.put('daily_bars', pl.DataFrame([row]))
+        query = {'symbols': ['SH.510300'], 'start': '2026-11-23', 'end': '2026-11-23'}
+        result = backend.query(query)
+        require(result['row_count'] == 1 and result['rows'][0]['open'] == row['open'],
+                '历史组件存储样本校验失败。', 'history_selftest_failed')
+        missing = backend.query({**query, 'adjustment': 'hfq'})
+        require(not missing['complete'] and not missing['rows'], '复权缺口校验失败。', 'history_selftest_failed')
+    return {'passed': True, 'live_collection': False, 'checks': ['storage', 'decimal', 'strict_adjustment']}
+
+
 def execute(request):
     version = verify_version()
     action, config = request['action'], request['config']
@@ -341,12 +370,18 @@ def execute(request):
         from equitylake_core.extensions import ensure_extensions
         with duckdb.connect() as connection:
             extensions = ensure_extensions(connection)
-        return {**version, 'extensions': extensions, 'python': sys.version, **space(config['root'], config)}
+        from importlib.metadata import version as package_version
+        dependencies = {name: package_version(name) for name in ('duckdb', 'polars', 'pyarrow', 'pandas', 'numpy', 'click', 'rich')}
+        return {**version, 'extensions': extensions, 'dependencies': dependencies, 'python': sys.version, **space(config['root'], config)}
+    if action == 'selftest':
+        return selftest(config)
     if action == 'init':
         with writer(config['root']):
             backend = Backend(config, create=True)
         return {**version, 'root': config['root'], 'snapshot': backend.lake.snapshot()}
     backend = Backend(config)
+    if action == 'validate':
+        return {'initialized': True, 'snapshot': backend.lake.snapshot()}
     if action == 'sync':
         return sync(backend, config, request['request'], datetime.now(timezone.utc))
     if action == 'bars':

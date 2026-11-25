@@ -11,8 +11,19 @@ from strathive.data.service import configuration as data_configuration
 
 
 def install(data, output):
-    history = typer.Typer(help='独立 CNEquity 历史库。', no_args_is_help=True)
+    history = typer.Typer(help='可选历史组件的安装、卸载、配置和诊断。', no_args_is_help=True)
     data.add_typer(history, name='history')
+
+    @history.command('install')
+    def install_component(bundle: Path | None = None, manifest: Path | None = None, repair: bool = False):
+        from strathive.data.history.component import install
+        output(install(bundle=bundle, manifest_file=manifest, repair=repair,
+                       progress=lambda message: typer.echo(message, err=True)))
+
+    @history.command('uninstall')
+    def uninstall_component():
+        from strathive.data.history.component import uninstall
+        output(uninstall())
 
     @history.command('configure')
     def configure(python: Path | None = None, root: Path | None = None,
@@ -27,6 +38,7 @@ def install(data, output):
             config['minute_symbols'] = [symbol(s) for s in minute_security]
         config['minute_days'] = minute_days
         config = configuration({'history': config})
+        config['enabled'] = True
         values['history'] = config
         selection = values.setdefault('selection', {})
         for capability in ('close', 'calendar'):

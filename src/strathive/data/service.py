@@ -29,7 +29,7 @@ class Data:
             name: Galaxy(value.get("connection", {}))
             for name, value in self.config.get("providers", {}).items() if name == "galaxy"
         }
-        if providers is None and "history" in self.config:
+        if providers is None and "history" in self.config and self.config["history"].get("enabled", True):
             self.providers["cnequity"] = History(self.config["history"])
 
     def status(self):

@@ -101,19 +101,19 @@ def test_setup_creates_custom_ledger_and_reopens_it(monkeypatch, tmp_path):
     monkeypatch.setattr(schedule, "enable", lambda: True)
     runner = CliRunner()
     directory = tmp_path / "my ledger"
-    result = runner.invoke(app, ["setup"], input=f"2\n{directory}\n2\n")
+    result = runner.invoke(app, ["setup"], input=f"2\n{directory}\n2\nn\n")
     assert result.exit_code == 0, result.output
     assert "其他存储介质" in result.output and "09:15" in result.output
-    assert "https://github.com/huguozhen/strat-hive/tree/v9.8.7/skills/strathive-ledger" in result.output
-    assert "/usr/share/strathive/skills/strathive-ledger" in result.output
+    assert "https://github.com/huguozhen/strat-hive/tree/v9.8.7/skills/strathive" in result.output
+    assert "/usr/share/strathive/skills/strathive" in result.output
     path = directory / "ledger.sqlite3"
     assert settings.ledger_path() == path
     assert settings.settings()["source"] == "public"
     assert (settings.config_dir() / "settings.json").stat().st_mode & 0o777 == 0o600
     before = path.stat().st_ino
-    result = runner.invoke(app, ["setup"], input="\n\n3\n")
+    result = runner.invoke(app, ["setup"], input="\n\n3\nn\n")
     assert result.exit_code == 0, result.output
-    assert "strathive-ledger" not in result.output
+    assert "skills/strathive" in result.output
     assert path.stat().st_ino == before
 
 
@@ -138,7 +138,7 @@ def test_galaxy_setup_recovers_from_download_and_endpoint_errors(monkeypatch, tm
     monkeypatch.setattr(sync, "request", lambda *_a, **_kw: catalog_file())
     monkeypatch.setattr(schedule, "enable", lambda: True)
     result = CliRunner().invoke(app, ["setup"], input=(
-        "\n\n\n2\n" + str(tmp_path) + "\ndemo\nsecret-credential\ny\n192.0.2.8\n8601\n"
+        "\n\n\n2\n" + str(tmp_path) + "\ndemo\nsecret-credential\ny\n192.0.2.8\n8601\nn\n"
     ))
     assert result.exit_code == 0, result.output
     assert attempts == [None, tmp_path]
