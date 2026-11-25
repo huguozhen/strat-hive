@@ -34,10 +34,11 @@ uv pip install --python "$bundled" --target "$target" --no-deps "$work/wheels/"*
 find "$runtime/bin" -maxdepth 1 -type f ! -name python3.14 -delete
 find "$runtime/bin" -xtype l -delete
 rm -rf "$target/bin"
-cp -r skills/strathive-ledger "$stage/usr/share/strathive/skills/"
-for history_file in install.py requirements.lock build-requirements.lock; do
-    install -Dm644 "scripts/history/$history_file" "$stage/usr/share/strathive/history/$history_file"
-done
+cp -r skills/strathive "$stage/usr/share/strathive/skills/"
+# The main package carries only trusted artifact metadata, not the heavy wheel bundle.
+if [[ -f dist/history-component.json ]]; then
+    install -Dm644 dist/history-component.json "$target/strathive/resources/history/component.json"
+fi
 install -Dm644 README.md "$stage/usr/share/doc/strathive/README.md"
 
 cat > "$stage/usr/bin/strathive" <<'LAUNCHER'
@@ -69,4 +70,9 @@ mkdir -p dist
 artifact="strathive_${version}_amd64.deb"
 chmod -R go-w "$stage"
 dpkg-deb --root-owner-group --build "$stage" "dist/$artifact"
-(cd dist && sha256sum "$artifact" > SHA256SUMS)
+if [[ -f dist/history-component.json ]]; then
+    component_bundle=$("$bundled" -I -c 'import json; print(json.load(open("dist/history-component.json"))["artifact"]["filename"])')
+    (cd dist && sha256sum "$artifact" "$component_bundle" history-component.json > SHA256SUMS)
+else
+    (cd dist && sha256sum "$artifact" > SHA256SUMS)
+fi

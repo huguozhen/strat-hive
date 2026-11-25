@@ -52,3 +52,24 @@ def cron_command():
     invocation = shlex.join([*command(), "security", "sync", "--if-stale"])
     # Ubuntu cron 在系统时区触发，使用 UTC 时可直接采用此时刻。
     return " ".join(["15 1 * * *", *variables, invocation]).replace("%", "\\%")
+
+
+def disable_history():
+    """Stop only our history units before removing an optional environment."""
+    from strathive.core.rules import LedgerError
+    directory = user_config_path("systemd") / "user"
+    tasks = [f"strathive-history-{name}" for name in ("daily", "minute", "retry")]
+    existing = [task for task in tasks if any((directory / f"{task}.{ext}").exists() for ext in ("service", "timer"))]
+    if not existing:
+        return
+    try:
+        timers = [f"{task}.timer" for task in existing]
+        services = [f"{task}.service" for task in existing]
+        for arguments in (["disable", "--now", *timers], ["stop", *services]):
+            subprocess.run(["systemctl", "--user", *arguments], capture_output=True, check=True, timeout=30)
+        for task in existing:
+            for extension in ("service", "timer"):
+                (directory / f"{task}.{extension}").unlink(missing_ok=True)
+        subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True, check=True, timeout=15)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise LedgerError("history_schedule_stop_failed", "无法停止历史任务，组件环境已保留；请检查 systemd 用户会话后重试。") from exc

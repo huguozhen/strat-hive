@@ -16,7 +16,7 @@ from . import COMMIT
 
 def defaults():
     return {'python': str(settings.data_dir() / 'history-env' / 'bin' / 'python'),
-            'root': str(settings.data_dir() / 'history'), 'minute_symbols': [], 'minute_days': 60,
+            'root': str(settings.data_dir() / 'history'), 'enabled': True, 'minute_symbols': [], 'minute_days': 60,
             'memory_limit': '2GB', 'threads': 2, 'fetch_workers': 2, 'write_batch_size': 100, 'warn_gb': 20, 'pause_gb': 10,
             'timeout_seconds': 21600}
 
@@ -44,7 +44,15 @@ class History:
 
     def status(self):
         root = Path(self.config['root'])
-        result = {'configured': 'history' in settings.settings(), 'installed': Path(self.config['python']).is_file(),
+        from .component import receipt
+        from .bundle import MANIFEST
+        try:
+            release = json.loads(MANIFEST.read_text())
+        except (OSError, ValueError):
+            release = {}
+        result = {'enabled': self.config.get('enabled', True),
+                  'managed': (receipt(self.config['python']) or {}).get('managed_by') == 'strathive',
+                  'download_available': bool(release.get('artifact')), 'configured': 'history' in settings.settings(), 'installed': self.config.get('enabled', True) and Path(self.config['python']).is_file(),
                   'initialized': (root / 'lake' / 'catalog.sqlite').is_file(), 'config': self.config,
                   'version': '0.25.0', 'commit': COMMIT, **space(root, self.config)}
         # Status stays available with a missing interpreter or a damaged lake.
@@ -62,16 +70,21 @@ class History:
                 result['journal_error'] = 'history_journal_unavailable'
         return result
 
-    def call(self, action, **arguments):
+    def call(self, action, *, _locked=False, **arguments):
+        require(self.config.get('enabled', True), '历史组件已卸载，请运行 strathive data history install。', 'history_backend_unavailable')
+        if not _locked:
+            from .component import access
+            with access():
+                return self.call(action, _locked=True, **arguments)
         python = Path(self.config['python'])
-        require(python.is_file(), '历史后端未安装；请运行 scripts/history/install.py。', 'history_backend_unavailable')
+        require(python.is_file(), '历史组件未安装；请运行 strathive data history install。', 'history_backend_unavailable')
         with tempfile.TemporaryDirectory(prefix='strathive-history-') as temporary:
             request, response = Path(temporary) / 'request.json', Path(temporary) / 'response.json'
             request.write_text(json.dumps({'action': action, 'config': self.config, **arguments}), encoding='utf-8')
-            env = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[3]),
+            env = {**os.environ,
                    'POLARS_MAX_THREADS': str(self.config['threads']), 'OMP_NUM_THREADS': str(self.config['threads'])}
             try:
-                process = subprocess.run([str(python), '-m', 'strathive.data.history.worker', str(request), str(response)],
+                process = subprocess.run([str(python), '-I', str(Path(__file__).with_name('entry.py')), str(request), str(response)],
                                          env=env, capture_output=True, text=True, timeout=self.config['timeout_seconds'])
             except (OSError, subprocess.TimeoutExpired) as exc:
                 raise LedgerError('history_backend_unavailable', '历史进程无法启动或超时；已提交批次可续跑。') from exc

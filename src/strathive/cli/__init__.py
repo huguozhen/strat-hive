@@ -104,7 +104,7 @@ def root(ctx: typer.Context, db: Path | None = typer.Option(None, help="指定�
     ctx.obj = Session(db)
 
 
-@app.command("setup", help="选择账本、配置证券数据源和每日同步。")
+@app.command("setup", help="选择账本、配置数据源、可选组件和每日同步。")
 def setup(ctx: typer.Context):
     from .setup import run
 

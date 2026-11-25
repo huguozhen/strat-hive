@@ -14,18 +14,28 @@
 
 ## 安装与使用
 
-开发工作树中执行；需要 uv 和可访问上游的网络，不修改系统 Python：
+历史能力是可选组件。正式发布包用户无需另外安装 Python、uv 或 Git，可在 `strathive setup` 中选择安装，或随时执行：
 
 ```bash
-python3 scripts/history/install.py
-# 安装脚本输出实际 python 路径；随后显式配置该路径。
-uv run --locked strathive data history configure \
-  --python ~/.local/share/strathive/history-env/bin/python
-uv run --locked strathive data history doctor
-uv run --locked strathive data history init
+strathive data history install
+strathive data history status
+strathive data history doctor
+strathive data history install --repair
+strathive data history uninstall
 ```
 
-Debian 包附带独立安装脚本及锁文件，入口为 `python3 /usr/share/strathive/history/install.py`；安装历史能力是可选步骤，账本包本身不携带重依赖。安装脚本先锁定构建工具，再按上游 frozen lock 安装运行依赖，最后安装固定 Git commit 并检查依赖和两个 DuckDB 扩展。扩展安装在当前用户的 DuckDB 缓存中，后续查询复用缓存。已有非空环境和旧历史库不会被覆盖或迁移；升级应安装到新目录，验证后切换配置。
+安装使用主包自带的 Python 3.14 创建独立环境，按主包内发布清单下载经过 SHA-256 校验的 wheel 制品；CNEquity、依赖和仅有源码发行的依赖均在发布构建时准备好。客户端只安装 wheel，不依赖编译工具、源码构建或 Git。安装过程验证依赖闭包、DuckDB 两个扩展、临时离线存储与严格复权缺口，随后初始化或连接保留的历史库并保存配置；不采真实行情、不启动定时器。
+
+失败时清理本次候选环境、保留当前配置与原环境，可重复执行安装。升级／修复使用新的版本目录，检查通过后切换；原环境保留供恢复。卸载停止并移除历史任务、删除组件管理的环境和下载缓存、解除收盘与日历路由，保留行情数据、配置、分钟清单和账本；外部 Python 环境、主包 Python 及共享扩展缓存不删除。重新安装会复用历史库。
+
+主包只携带组件清单，独立的 `strathive-history-*.tar.gz` 随同版本 Release 分发，压缩制品的体积不等于环境安装后的占用。离线安装使用 `--bundle FILE`，但首次准备 DuckDB 扩展仍需网络或已有缓存。未发布构建的默认清单没有可下载制品，会返回 `history_artifact_unavailable`；源码开发者可构建并显式提供清单：
+
+```bash
+uv run --locked python scripts/history/build.py
+strathive data history install --manifest dist/history-component.json --bundle dist/strathive-history-实际文件名.tar.gz
+```
+
+制品构建需要 uv／Git 与网络，发布 CI 运行该步骤，并把制品 SHA-256／下载地址嵌入 `.deb`；这些是构建环境依赖。`--source` 可指定固定提交的干净 CNEquity checkout，`--wheel-source` 可使用预下载依赖进行构建。Core 的 `pyproject.toml` 和 `uv.lock` 保持轻量。主包升级导致 Python 补丁版本变化时，执行安装／修复会准备并检查匹配的新环境，避免在运行中直接升级旧环境。
 
 显式小样本与资源记录（独立新库，不混入离线合成夹具）：
 
@@ -62,7 +72,7 @@ strathive data history maintain
 
 `maintain` 仅显式合并小文件，不自动过期快照、删除旧修订或按日期淘汰行情。清空分钟清单也保留已采集的数据。
 
-配置存放于既有 XDG `settings.json` 的独立 `history` 项：`root`、`python`、`minute_symbols`、`minute_days`、`memory_limit`（默认 2GB）、`threads`（2）、`fetch_workers`（2）、`write_batch_size`（100）、`warn_gb`（20）、`pause_gb`（10）、`timeout_seconds`（21600）。路径与证券标识在入口规范化，解释器保留 venv 符号链接路径。少于 10GB 剩余空间时暂停新增历史写入，状态和查询仍可使用。HTTP 来源使用系统受信任 CA 验证 TLS，可使用标准 `SSL_CERT_FILE`，没有关闭证书校验。
+托管环境位于 XDG 数据目录的 `strathive/components/history/environments/`，下载缓存单独保存。原来手工配置的 Python 仍可通过高级 configure 命令使用。配置存放于既有 XDG `settings.json` 的独立 `history` 项：`enabled`、`root`、`python`、`minute_symbols`、`minute_days`、`memory_limit`（默认 2GB）、`threads`（2）、`fetch_workers`（2）、`write_batch_size`（100）、`warn_gb`（20）、`pause_gb`（10）、`timeout_seconds`（21600）。路径与证券标识在入口规范化，解释器保留 venv 符号链接路径。少于 10GB 剩余空间时暂停新增历史写入，状态和查询仍可使用。HTTP 来源使用系统受信任 CA 验证 TLS，可使用标准 `SSL_CERT_FILE`，没有关闭证书校验。
 
 ## 数据与查询约定
 

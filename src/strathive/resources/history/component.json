@@ -1,0 +1,9 @@
+{
+  "format": 1,
+  "component": "history",
+  "cnequity_version": "0.25.0",
+  "commit": "dd6881ad7a3e8fce4ed4314711c99f6251ec06f8",
+  "python": "3.14",
+  "platform": "linux_x86_64",
+  "artifact": null
+}

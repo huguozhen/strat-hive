@@ -15,7 +15,7 @@ from strathive.sources.sync import SOURCE_NAMES, request, synchronize
 
 DEFAULT_HOST = "140.206.44.234"
 DEFAULT_PORT = 8600
-SKILL_NAME = "strathive-ledger"
+SKILL_NAME = "strathive"
 SKILL_REPO = "https://github.com/huguozhen/strat-hive"
 
 
@@ -106,8 +106,27 @@ def show_agent_setup():
                "运行 `strathive --help` 验证命令可用，并告诉我如何调用它。")
 
 
+def offer_history():
+    """Installing optional software never starts a market-wide backfill or timer."""
+    from strathive.data.history.provider import History
+    from strathive.data.history.component import install
+    status = History().status()
+    if status['installed']:
+        typer.echo("历史组件已安装。可用 data history status 查看，或 data history uninstall 卸载；卸载保留历史数据。")
+        return
+    typer.echo("历史数据是可选组件，可随时用 strathive data history install 安装，或 uninstall 卸载。")
+    if not typer.confirm("现在安装历史组件？（首次需联网下载约数百 MB，安装后约 0.8GB；不自动采集行情）", default=False):
+        return
+    try:
+        result = install(progress=typer.echo)
+        typer.echo(f"历史组件已安装，数据目录 {result['data_root']}。使用 data sync 按需同步行情。")
+    except LedgerError as exc:
+        typer.echo(f"历史组件安装未完成：{exc} 账本和原配置保持可用，可稍后重试。", err=True)
+
+
 def run(catalog):
     """切换数据源前先完成整次同步，失败时保留原先的来源。"""
+    configured = False
     with catalog.refresh_lock():
         values = settings.settings()
         values["ledger"] = choose_ledger(catalog)
@@ -118,7 +137,7 @@ def run(catalog):
             if choice == 3:
                 if not values.get("source"):
                     typer.echo("账本已选定。可稍后运行 strathive setup 配置数据源。")
-                return
+                break
             config = galaxy_config(values) if choice == 1 else {"source": "public"}
             if config is None:
                 continue
@@ -137,12 +156,14 @@ def run(catalog):
             typer.echo(f"同步完成，共更新 {result['count']} 条证券记录。")
             if result["conflicts"]:
                 typer.echo(f"保留了 {len(result['conflicts'])} 条品种冲突记录的原值。")
+            configured = True
             break
-    if schedule.enable():
+    if configured and schedule.enable():
         typer.echo("已启用每日同步，北京时间 09:15 运行。")
-    else:
+    elif configured:
         typer.echo("当前无法启动 systemd 用户任务。重新登录后可运行 "
                    "systemctl --user enable --now strathive-security-sync.timer。", err=True)
         typer.echo("也可配置 cron。以下示例适用于系统时区为 UTC 的机器：", err=True)
         typer.echo(schedule.cron_command(), err=True)
+    offer_history()
     show_agent_setup()

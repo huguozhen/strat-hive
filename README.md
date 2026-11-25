@@ -16,7 +16,7 @@ strathive setup
 
 推荐使用银河星耀数智。请先联系中国银河证券客户经理申请账号和密码，向导会安装 SDK 并测试连接。暂时没有账号时可选择公开证券目录。首次同步后，两种来源都按北京时间 09:15 每日刷新。没有 systemd 用户会话时，向导会给出手动启用和 cron 配置提示。
 
-向导完成后，把终端显示的提示词复制给你常用的本机 Agent，例如 Hermes、OpenClaw、Codex 或 WorkBuddy。提示词包含与当前安装版本匹配的 GitHub Skill 目录，也提供安装包内的备用路径 `/usr/share/strathive/skills/strathive-ledger`。
+向导完成后，把终端显示的提示词复制给你常用的本机 Agent，例如 Hermes、OpenClaw、Codex 或 WorkBuddy。提示词包含与当前安装版本匹配的 GitHub Skill 目录，也提供安装包内的备用路径 `/usr/share/strathive/skills/strathive`。
 
 ## 从源码运行与接入 Agent
 
@@ -28,26 +28,51 @@ export PATH="$PWD/.venv/bin:$PATH"
 strathive --help
 ```
 
-将仓库中的 `skills/strathive-ledger` 复制到项目的 `.agents/skills/strathive-ledger`，并让 Codex 会话继承上述 `PATH`。启动新会话后，使用 `$strathive-ledger` 操作账本。
+将仓库中的 `skills/strathive` 复制到项目的 `.agents/skills/strathive`，并让 Codex 会话继承上述 `PATH`。启动新会话后，使用 `$strathive` 操作账本。
 
-## 用 Agent 操作账本
+## 用 Agent 操作 StratHive
 
 可以先用独立账本体验，告诉 Agent：
 
-> 使用 $strathive-ledger，在 demo.sqlite3 建一个示例账本。建立一个只有 10,000 元现金的券商账户，佣金费率 0.03%，建账截止时间为 2026-11-01 09:00。创建一个人工策略，并在 2026-11-02 09:00 启动一次运行，分配 2,000 元期初现金。
+> 使用 $strathive，在 demo.sqlite3 建一个示例账本。建立一个只有 10,000 元现金的券商账户，佣金费率 0.03%，建账截止时间为 2026-11-01 09:00。创建一个人工策略，并在 2026-11-02 09:00 启动一次运行，分配 2,000 元期初现金。
 
-随后可以让 Agent 记录实际成交、查询运行持仓或导入券商快照对账。结束运行时，先告知 Agent 剩余证券是已经卖出，还是要交给同一账户的新运行。关键写入由 Agent 确认所需输入并依据 CLI 结果反馈。
+随后可以让 Agent 记录实际成交、查询运行持仓、导入券商快照对账，或查询行情与管理可选历史组件。结束运行时，先告知 Agent 剩余证券是已经卖出，还是要交给同一账户的新运行。关键写入由 Agent 确认所需输入并依据 CLI 结果反馈。
 
 建账或修改账户时可分别提供股票、ETF 佣金费率，例如股票 0.03%、ETF 0.01%。CLI 使用 `--stock-commission-rate 0.0003 --etf-commission-rate 0.0001`，也可在 `account edit` 中单独修改其中一类。
 
 ## CLI 契约与排障
 
-CLI 面向 Agent 和自动化调用。业务命令默认返回 JSON，命令参数用 `--help` 查看。CLI 默认使用向导选定的账本，全局 `--db PATH` 可覆盖单次操作。下列接口和 [结构化输入示例](skills/strathive-ledger/references/inputs.md) 描述本版设计，排障时以安装版本的帮助为准。
+CLI 面向 Agent 和自动化调用。业务命令默认返回 JSON，命令参数用 `--help` 查看。CLI 默认使用向导选定的账本，全局 `--db PATH` 可覆盖单次操作。下列接口和 [结构化输入示例](skills/strathive/references/inputs.md) 描述本版设计，排障时以安装版本的帮助为准。
 
 - `strategy create` 生成 `v1`。更新策略资料后可用 `strategy version create --strategy-id ID` 固化新版本。`run create` 可通过 `--version` 指定版本，省略时绑定当时的最新版。
 - `run show ID` 返回绑定版本和运行资产。记成交、带持仓建账及结束运行等写入可通过请求 ID 恢复已提交结果。
 - `strathive db backup --file backup.sqlite3` 创建一致性备份。`strathive --db recovered.sqlite3 db restore --file backup.sqlite3` 恢复到新账本。恢复后可通过 `strathive setup` 选用这个文件。打开旧版账本时，向导会在迁移前生成备份。
 - `strathive security sync` 手动刷新目录，`strathive security sync-status` 查看最后一次尝试和成功时间。`strathive security import --file securities.csv` 把 CSV 导入独立的证券目录库。
+
+## 可选历史数据组件
+
+历史数据能力可在 `strathive setup` 中选择安装，也可随时单独操作：
+
+```sh
+strathive data history install
+strathive data history status
+strathive data history uninstall
+```
+
+主包包含账本、CLI 和 Python 运行时。历史组件启用时再下载锁定的 CNEquity 0.25.0 及其依赖，安装到独立环境；用户无需另装 Python、uv、Git 或编译工具。首次安装需要网络，约数百 MB 下载及约 0.8GB 安装空间；DuckDB 扩展准备后复用缓存。主包不包含这些重依赖。
+
+安装只准备软件、检查临时离线样本并初始化历史库，不自动采集全市场或启用历史定时器。需要行情时再指定证券、日期和周期：
+
+```sh
+strathive data sync --security SH.510300 --period 1d --start 2026-11-09 --end 2026-11-23
+strathive data bars --security SH.510300 --start 2026-11-09 --end 2026-11-23
+```
+
+卸载会停止历史任务、移除由 StratHive 管理的组件环境及下载缓存，保留历史行情、分钟清单和投资账本；重新安装后继续使用保留的数据。用户自备的 Python 环境、主包 Python 和共享 DuckDB 扩展缓存保留。安装失败可重试，修复使用 `strathive data history install --repair`，原环境和配置在新环境检查通过前保持有效。
+
+正式发布的 `.deb` 内含与该版本对应的制品地址和 SHA-256。离线时可从同一 Release 下载独立的 `strathive-history-*.tar.gz`，用 `data history install --bundle FILE` 安装；首次准备扩展仍需要网络或已有扩展缓存。源码开发或未发布构建须先生成制品及清单，并传入 `--manifest FILE --bundle FILE`，不会自动安装未经锁定的最新版。
+
+新版本 Skill 名为 **`strathive`**，包含账本、行情和组件管理三个流程；安装向导提供对应版本链接及本机副本。此前已安装的 `strathive-ledger` 仍可使用原账本命令，需要新能力时按向导更新为 `strathive`。
 
 ## 升级与回滚
 
@@ -59,7 +84,7 @@ CLI 面向 Agent 和自动化调用。业务命令默认返回 JSON，命令参�
 
 离线证券目录记录来源和获取日期。深交所接口不可用时，深圳条目采用东方财富目录。可运行 `uv run python scripts/update-securities.py` 更新源码中的离线目录。
 
-普通 PR 的 CI 运行 `uv run --locked pytest -q`，不构建安装包或启动 Docker。维护者可运行 `./scripts/build-deb.sh` 在本机构建 `.deb` 和 `SHA256SUMS`。
+普通 PR 的 CI 运行 `uv run --locked pytest -q`，不构建安装包或启动 Docker。维护者用 `uv run --locked python scripts/history/build.py` 生成独立历史制品及清单，再运行 `./scripts/build-deb.sh` 在本机构建 `.deb` 和 `SHA256SUMS`。
 
 推送与 `pyproject.toml` 版本一致的 `vX.Y.Z` 标签后，Linux release 工作流运行测试、构建安装包、验证 Ubuntu 安装和干净容器中的包内运行时，再创建 Release 草稿供维护者核对发布。也可在 GitHub Actions 中手动运行该工作流，提前验证并下载构建产物；手动运行不创建或更新 Release 草稿。 [实施计划](docs/mvp/银河数据源与Linux发布实施计划.md)
 
@@ -80,4 +105,4 @@ strathive valuation run --run-id 1 --offline
 
 带持仓建账、持仓交接会按生效日期自动获取收盘价并回显；行情不可用时事实仍可入账，市值标为待估值。配置恢复后可用 `strathive valuation complete --run-id 1` 补齐空缺计量，已保存价格保持原值。期初及交接价格随账本备份，不依赖行情缓存恢复。
 
-历史行情另见 [F001 阶段 D](docs/F001-data-service/D阶段历史数据.md)：独立安装 CNEquity 0.25.0，使用 `data bars`、`data sync` 和 `data history` 命令。未安装历史后端时仍可使用账本。
+历史数据的范围、复权、聚合和资源约定见 [F001 阶段 D](docs/F001-data-service/D阶段历史数据.md)。
